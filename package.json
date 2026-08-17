@@ -1,22 +1,7 @@
 {
-  "name": "khamma-ghani-food-platform",
+  "name": "@khamma-ghani/shared",
   "private": true,
   "version": "0.1.0",
-  "description": "Production-oriented zero-budget food delivery platform foundation.",
-  "workspaces": ["apps/*", "packages/*"],
-  "scripts": {
-    "dev:web": "npm run dev -w @khamma-ghani/web",
-    "dev:api": "npm run dev -w @khamma-ghani/api",
-    "build": "npm run build -w @khamma-ghani/web && npm run build -w @khamma-ghani/api",
-    "typecheck": "npm run typecheck -w @khamma-ghani/web && npm run typecheck -w @khamma-ghani/api",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
-  },
-  "engines": {
-    "node": ">=20.19.0"
-  },
-  "devDependencies": {
-    "prisma": "^7.0.0"
-  }
+  "type": "module",
+  "main": "./src/index.ts"
 }
