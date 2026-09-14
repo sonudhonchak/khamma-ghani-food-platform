@@ -71,25 +71,29 @@ enum DeliveryStatus {
 }
 
 model User {
-  id                 String       @id @default(cuid())
-  name               String
-  email              String?      @unique
-  phone              String?      @unique
-  passwordHash       String?
-  role               UserRole     @default(CUSTOMER)
-  status             UserStatus   @default(ACTIVE)
-  profileImage       String?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  id               String           @id @default(cuid())
+  name             String
+  email            String?          @unique
+  phone            String?          @unique
+  passwordHash     String?
+  role             UserRole         @default(CUSTOMER)
+  status           UserStatus       @default(ACTIVE)
+  profileImage     String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
-  addresses          Address[]
-  carts              Cart[]
-  orders             Order[]
-  reviews            Review[]
-  favorites          Favorite[]
-  notifications      Notification[]
-  ownedRestaurants   Restaurant[] @relation("RestaurantOwner")
-  deliveryProfile    DeliveryPartner?
+  addresses        Address[]
+  carts            Cart[]
+  orders           Order[]
+  reviews          Review[]
+  favorites        Favorite[]
+  notifications    Notification[]
+  ownedRestaurants Restaurant[]      @relation("RestaurantOwner")
+  deliveryProfile  DeliveryPartner?
+  couponUsages     CouponUsage[]
+
+  @@index([role, status])
+  @@index([createdAt])
 }
 
 model Address {
@@ -113,43 +117,45 @@ model Address {
   orders       Order[]
 
   @@index([userId])
+  @@index([userId, isDefault])
 }
 
 model Restaurant {
-  id             String           @id @default(cuid())
-  ownerId        String
-  name           String
-  slug           String           @unique
-  description    String?
-  logo           String?
-  coverImage     String?
-  cuisine        String
-  address        String
-  city           String
-  latitude       Decimal?         @db.Decimal(10, 7)
-  longitude      Decimal?         @db.Decimal(10, 7)
-  rating         Decimal          @default(0) @db.Decimal(3, 2)
-  deliveryTime   Int              @default(30)
-  deliveryFee    Decimal          @default(0) @db.Decimal(10, 2)
-  minimumOrder   Decimal          @default(0) @db.Decimal(10, 2)
-  status         RestaurantStatus @default(PENDING)
-  openingTime    String
-  closingTime    String
-  isAcceptingOrders Boolean       @default(true)
-  isBusy         Boolean          @default(false)
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  id                  String           @id @default(cuid())
+  ownerId             String
+  name                String
+  slug                String           @unique
+  description         String?
+  logo                String?
+  coverImage          String?
+  cuisine              String
+  address              String
+  city                String
+  latitude            Decimal?         @db.Decimal(10, 7)
+  longitude           Decimal?         @db.Decimal(10, 7)
+  rating              Decimal          @default(0) @db.Decimal(3, 2)
+  deliveryTime        Int              @default(30)
+  deliveryFee         Decimal          @default(0) @db.Decimal(10, 2)
+  minimumOrder        Decimal          @default(0) @db.Decimal(10, 2)
+  status              RestaurantStatus @default(PENDING)
+  openingTime         String
+  closingTime         String
+  isAcceptingOrders  Boolean          @default(true)
+  isBusy              Boolean          @default(false)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
-  owner          User             @relation("RestaurantOwner", fields: [ownerId], references: [id])
-  categories     Category[]
-  foods          FoodItem[]
-  carts          Cart[]
-  orders         Order[]
-  reviews        Review[]
-  favorites      Favorite[]
+  owner               User             @relation("RestaurantOwner", fields: [ownerId], references: [id])
+  categories          Category[]
+  foods               FoodItem[]
+  carts               Cart[]
+  orders              Order[]
+  reviews             Review[]
+  favorites           Favorite[]
 
   @@index([ownerId])
   @@index([city, status])
+  @@index([status, isAcceptingOrders])
 }
 
 model Category {
@@ -185,6 +191,7 @@ model FoodItem {
   restaurant      Restaurant  @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   category        Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   options         FoodOption[]
+  images          FoodImage[]
   cartItems       CartItem[]
   orderItems      OrderItem[]
   reviews         Review[]
@@ -192,6 +199,22 @@ model FoodItem {
 
   @@unique([restaurantId, slug])
   @@index([restaurantId, availability])
+  @@index([categoryId, availability])
+}
+
+model FoodImage {
+  id         String   @id @default(cuid())
+  foodItemId String
+  url        String
+  altText    String?
+  sortOrder  Int      @default(0)
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  foodItem   FoodItem @relation(fields: [foodItemId], references: [id], onDelete: Cascade)
+
+  @@unique([foodItemId, sortOrder])
+  @@index([foodItemId, isPrimary])
 }
 
 model FoodOption {
@@ -204,28 +227,33 @@ model FoodOption {
 
   foodItem    FoodItem    @relation(fields: [foodItemId], references: [id], onDelete: Cascade)
   choices     FoodOptionChoice[]
+
+  @@index([foodItemId])
 }
 
 model FoodOptionChoice {
-  id          String     @id @default(cuid())
-  optionId    String
-  name        String
-  price       Decimal    @default(0) @db.Decimal(10, 2)
+  id        String      @id @default(cuid())
+  optionId  String
+  name      String
+  price     Decimal     @default(0) @db.Decimal(10, 2)
 
-  option      FoodOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  option    FoodOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@index([optionId])
 }
 
 model Cart {
-  id           String      @id @default(cuid())
+  id           String     @id @default(cuid())
   userId       String
   restaurantId String
-  updatedAt    DateTime    @updatedAt
+  updatedAt    DateTime   @updatedAt
 
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  restaurant   Restaurant  @relation(fields: [restaurantId], references: [id])
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
   items        CartItem[]
 
   @@unique([userId])
+  @@index([restaurantId])
 }
 
 model CartItem {
@@ -238,6 +266,9 @@ model CartItem {
 
   cart            Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
   foodItem        FoodItem @relation(fields: [foodItemId], references: [id])
+
+  @@index([cartId])
+  @@index([foodItemId])
 }
 
 model Order {
@@ -247,16 +278,30 @@ model Order {
   restaurantId          String
   deliveryPartnerId     String?
   addressId             String
+
   subtotal              Decimal         @db.Decimal(10, 2)
   deliveryFee           Decimal         @db.Decimal(10, 2)
   taxes                 Decimal         @db.Decimal(10, 2)
   discount              Decimal         @db.Decimal(10, 2)
   total                 Decimal         @db.Decimal(10, 2)
+
   paymentMethod         PaymentMethod
   paymentStatus         PaymentStatus   @default(PENDING)
   orderStatus           OrderStatus     @default(PLACED)
+
   notes                 String?
   estimatedDeliveryTime Int?
+
+  addressNameSnapshot   String
+  addressPhoneSnapshot  String
+  addressLineSnapshot   String
+  addressLandmarkSnapshot String?
+  addressCitySnapshot   String
+  addressStateSnapshot  String
+  addressPincodeSnapshot String
+  addressLatitudeSnapshot Decimal?      @db.Decimal(10, 7)
+  addressLongitudeSnapshot Decimal?     @db.Decimal(10, 7)
+
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
@@ -266,13 +311,16 @@ model Order {
   address               Address         @relation(fields: [addressId], references: [id])
   items                 OrderItem[]
   payment               Payment?
+  statusHistory         OrderStatusHistory[]
+  deliveryEvents        DeliveryTrackingEvent[]
   reviews               Review[]
   notifications         Notification[]
+  couponUsage           CouponUsage?
 
   @@index([userId, createdAt])
   @@index([restaurantId, createdAt])
   @@index([deliveryPartnerId, createdAt])
-  @@index([orderStatus])
+  @@index([orderStatus, createdAt])
 }
 
 model OrderItem {
@@ -286,6 +334,39 @@ model OrderItem {
 
   order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   foodItem        FoodItem @relation(fields: [foodItemId], references: [id])
+
+  @@index([orderId])
+  @@index([foodItemId])
+}
+
+model OrderStatusHistory {
+  id        String      @id @default(cuid())
+  orderId   String
+  status    OrderStatus
+  note      String?
+  createdAt DateTime    @default(now())
+
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([status, createdAt])
+}
+
+model DeliveryTrackingEvent {
+  id                String         @id @default(cuid())
+  orderId           String
+  deliveryPartnerId String?
+  status            DeliveryStatus
+  latitude          Decimal?       @db.Decimal(10, 7)
+  longitude         Decimal?       @db.Decimal(10, 7)
+  note              String?
+  createdAt         DateTime       @default(now())
+
+  order             Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  deliveryPartner   DeliveryPartner? @relation(fields: [deliveryPartnerId], references: [id])
+
+  @@index([orderId, createdAt])
+  @@index([deliveryPartnerId, createdAt])
 }
 
 model Payment {
@@ -300,21 +381,45 @@ model Payment {
   updatedAt         DateTime      @updatedAt
 
   order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([providerPaymentId])
+  @@index([status, createdAt])
 }
 
 model Coupon {
-  id              String   @id @default(cuid())
-  code            String   @unique
-  percentage      Decimal? @db.Decimal(5, 2)
-  flatDiscount    Decimal? @db.Decimal(10, 2)
-  minimumOrder    Decimal @default(0) @db.Decimal(10, 2)
-  maximumDiscount Decimal? @db.Decimal(10, 2)
+  id              String        @id @default(cuid())
+  code            String        @unique
+  percentage      Decimal?      @db.Decimal(5, 2)
+  flatDiscount    Decimal?      @db.Decimal(10, 2)
+  minimumOrder    Decimal       @default(0) @db.Decimal(10, 2)
+  maximumDiscount Decimal?      @db.Decimal(10, 2)
   expiresAt       DateTime
   usageLimit      Int?
-  perUserLimit    Int      @default(1)
-  active          Boolean  @default(true)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  perUserLimit    Int           @default(1)
+  active          Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  usages          CouponUsage[]
+
+  @@index([active, expiresAt])
+}
+
+model CouponUsage {
+  id        String   @id @default(cuid())
+  couponId  String
+  userId    String
+  orderId   String   @unique
+  discount  Decimal  @db.Decimal(10, 2)
+  createdAt DateTime @default(now())
+
+  coupon    Coupon   @relation(fields: [couponId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([couponId, createdAt])
+  @@index([userId, createdAt])
+  @@unique([couponId, userId, orderId])
 }
 
 model Review {
@@ -336,6 +441,7 @@ model Review {
 
   @@unique([userId, orderId, restaurantId])
   @@index([restaurantId, rating])
+  @@index([foodItemId, rating])
 }
 
 model Favorite {
@@ -349,37 +455,44 @@ model Favorite {
   restaurant   Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
   foodItem     FoodItem?   @relation(fields: [foodItemId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+  @@index([restaurantId])
+  @@index([foodItemId])
   @@unique([userId, restaurantId, foodItemId])
 }
 
 model Notification {
-  id           String   @id @default(cuid())
-  userId       String
-  orderId      String?
-  title        String
-  message      String
-  type         String
-  readAt       DateTime?
-  createdAt    DateTime @default(now())
+  id        String   @id @default(cuid())
+  userId    String
+  orderId   String?
+  title     String
+  message   String
+  type      String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
 
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  order        Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
+  @@index([userId, readAt])
 }
 
 model DeliveryPartner {
-  id             String         @id @default(cuid())
-  userId         String         @unique
-  isAvailable    Boolean        @default(false)
-  status         DeliveryStatus @default(AVAILABLE)
-  vehicleType    String?
-  vehicleNumber  String?
-  latitude       Decimal?       @db.Decimal(10, 7)
-  longitude      Decimal?       @db.Decimal(10, 7)
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id                String         @id @default(cuid())
+  userId            String         @unique
+  isAvailable       Boolean        @default(false)
+  status            DeliveryStatus @default(AVAILABLE)
+  vehicleType       String?
+  vehicleNumber     String?
+  latitude          Decimal?       @db.Decimal(10, 7)
+  longitude         Decimal?       @db.Decimal(10, 7)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  orders         Order[]
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders            Order[]
+  trackingEvents    DeliveryTrackingEvent[]
+
+  @@index([status, isAvailable])
 }
