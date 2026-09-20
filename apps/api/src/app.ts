@@ -71,4 +71,4 @@ app.use((_req, res) => {
   });
 });
 
-export { app };
+export default app;
