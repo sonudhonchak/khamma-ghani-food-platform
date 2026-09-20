@@ -7,7 +7,7 @@ export interface AuthenticatedRequest extends Request {
 }
 
 export async function requireAuth(
-  req: AuthenticatedRequest,
+  req: Request,
   res: Response,
   next: NextFunction
 ) {
@@ -82,7 +82,7 @@ export async function requireAuth(
       profileImage: session.user.profileImage,
     };
 
-    req.user = user;
+    (req as AuthenticatedRequest).user = user;
 
     return next();
   } catch (error) {
