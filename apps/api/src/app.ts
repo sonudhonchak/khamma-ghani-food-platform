@@ -1,6 +1,11 @@
 import cors from "cors";
 import express from "express";
 import { z } from "zod";
+import authRouter from "./routes/auth.js";
+import {
+  requireAuth,
+  type AuthenticatedRequest,
+} from "./middleware/auth.js";
 
 const app = express();
 
@@ -17,6 +22,22 @@ app.use(
 );
 
 app.use(express.json({ limit: "1mb" }));
+
+// Authentication routes
+app.use("/api/v1/auth", authRouter);
+
+// Protected current-user route
+app.get(
+  "/api/v1/auth/me",
+  requireAuth,
+  (req: AuthenticatedRequest, res) => {
+    res.json({
+      data: {
+        user: req.user,
+      },
+    });
+  }
+);
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -62,6 +83,7 @@ app.get("/api/v1/restaurants", (req, res) => {
   });
 });
 
+// 404 handler
 app.use((_req, res) => {
   res.status(404).json({
     error: {
