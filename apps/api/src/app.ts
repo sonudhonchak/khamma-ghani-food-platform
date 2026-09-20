@@ -27,17 +27,15 @@ app.use(express.json({ limit: "1mb" }));
 app.use("/api/v1/auth", authRouter);
 
 // Protected current-user route
-app.get(
-  "/api/v1/auth/me",
-  requireAuth,
-  (req: AuthenticatedRequest, res) => {
-    res.json({
-      data: {
-        user: req.user,
-      },
-    });
-  }
-);
+app.get("/api/v1/auth/me", requireAuth, (req, res) => {
+  const authenticatedReq = req as AuthenticatedRequest;
+
+  res.json({
+    data: {
+      user: authenticatedReq.user,
+    },
+  });
+});
 
 app.get("/health", (_req, res) => {
   res.json({
