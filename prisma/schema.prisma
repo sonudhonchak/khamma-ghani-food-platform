@@ -91,9 +91,28 @@ model User {
   ownedRestaurants Restaurant[]      @relation("RestaurantOwner")
   deliveryProfile  DeliveryPartner?
   couponUsages     CouponUsage[]
+  sessions         AuthSession[]
 
   @@index([role, status])
   @@index([createdAt])
+  @@index([email])
+  @@index([phone])
+}
+
+model AuthSession {
+  id         String    @id @default(cuid())
+  tokenHash  String    @unique
+  userId     String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([userId, revokedAt])
 }
 
 model Address {
@@ -128,8 +147,8 @@ model Restaurant {
   description         String?
   logo                String?
   coverImage          String?
-  cuisine              String
-  address              String
+  cuisine             String
+  address             String
   city                String
   latitude            Decimal?         @db.Decimal(10, 7)
   longitude           Decimal?         @db.Decimal(10, 7)
@@ -140,7 +159,7 @@ model Restaurant {
   status              RestaurantStatus @default(PENDING)
   openingTime         String
   closingTime         String
-  isAcceptingOrders  Boolean          @default(true)
+  isAcceptingOrders   Boolean          @default(true)
   isBusy              Boolean          @default(false)
   createdAt           DateTime         @default(now())
   updatedAt           DateTime         @updatedAt
@@ -218,26 +237,26 @@ model FoodImage {
 }
 
 model FoodOption {
-  id          String      @id @default(cuid())
+  id          String             @id @default(cuid())
   foodItemId  String
   name        String
-  isRequired  Boolean     @default(false)
-  minSelect   Int         @default(0)
-  maxSelect   Int         @default(1)
+  isRequired  Boolean            @default(false)
+  minSelect   Int                @default(0)
+  maxSelect   Int                @default(1)
 
-  foodItem    FoodItem    @relation(fields: [foodItemId], references: [id], onDelete: Cascade)
+  foodItem    FoodItem           @relation(fields: [foodItemId], references: [id], onDelete: Cascade)
   choices     FoodOptionChoice[]
 
   @@index([foodItemId])
 }
 
 model FoodOptionChoice {
-  id        String      @id @default(cuid())
+  id        String     @id @default(cuid())
   optionId  String
   name      String
-  price     Decimal     @default(0) @db.Decimal(10, 2)
+  price     Decimal    @default(0) @db.Decimal(10, 2)
 
-  option    FoodOption  @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  option    FoodOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
 
   @@index([optionId])
 }
@@ -272,50 +291,50 @@ model CartItem {
 }
 
 model Order {
-  id                    String          @id @default(cuid())
-  orderNumber           String          @unique
-  userId                String
-  restaurantId          String
-  deliveryPartnerId     String?
-  addressId             String
+  id                       String           @id @default(cuid())
+  orderNumber              String           @unique
+  userId                   String
+  restaurantId             String
+  deliveryPartnerId        String?
+  addressId                String
 
-  subtotal              Decimal         @db.Decimal(10, 2)
-  deliveryFee           Decimal         @db.Decimal(10, 2)
-  taxes                 Decimal         @db.Decimal(10, 2)
-  discount              Decimal         @db.Decimal(10, 2)
-  total                 Decimal         @db.Decimal(10, 2)
+  subtotal                 Decimal          @db.Decimal(10, 2)
+  deliveryFee              Decimal          @db.Decimal(10, 2)
+  taxes                    Decimal          @db.Decimal(10, 2)
+  discount                 Decimal          @db.Decimal(10, 2)
+  total                    Decimal          @db.Decimal(10, 2)
 
-  paymentMethod         PaymentMethod
-  paymentStatus         PaymentStatus   @default(PENDING)
-  orderStatus           OrderStatus     @default(PLACED)
+  paymentMethod            PaymentMethod
+  paymentStatus            PaymentStatus   @default(PENDING)
+  orderStatus              OrderStatus     @default(PLACED)
 
-  notes                 String?
-  estimatedDeliveryTime Int?
+  notes                    String?
+  estimatedDeliveryTime    Int?
 
-  addressNameSnapshot   String
-  addressPhoneSnapshot  String
-  addressLineSnapshot   String
-  addressLandmarkSnapshot String?
-  addressCitySnapshot   String
-  addressStateSnapshot  String
-  addressPincodeSnapshot String
-  addressLatitudeSnapshot Decimal?      @db.Decimal(10, 7)
-  addressLongitudeSnapshot Decimal?     @db.Decimal(10, 7)
+  addressNameSnapshot      String
+  addressPhoneSnapshot     String
+  addressLineSnapshot      String
+  addressLandmarkSnapshot  String?
+  addressCitySnapshot      String
+  addressStateSnapshot     String
+  addressPincodeSnapshot   String
+  addressLatitudeSnapshot  Decimal?         @db.Decimal(10, 7)
+  addressLongitudeSnapshot Decimal?         @db.Decimal(10, 7)
 
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
 
-  user                  User            @relation(fields: [userId], references: [id])
-  restaurant            Restaurant      @relation(fields: [restaurantId], references: [id])
-  deliveryPartner       DeliveryPartner? @relation(fields: [deliveryPartnerId], references: [id])
-  address               Address         @relation(fields: [addressId], references: [id])
-  items                 OrderItem[]
-  payment               Payment?
-  statusHistory         OrderStatusHistory[]
-  deliveryEvents        DeliveryTrackingEvent[]
-  reviews               Review[]
-  notifications         Notification[]
-  couponUsage           CouponUsage?
+  user                     User             @relation(fields: [userId], references: [id])
+  restaurant               Restaurant       @relation(fields: [restaurantId], references: [id])
+  deliveryPartner          DeliveryPartner? @relation(fields: [deliveryPartnerId], references: [id])
+  address                  Address          @relation(fields: [addressId], references: [id])
+  items                    OrderItem[]
+  payment                  Payment?
+  statusHistory            OrderStatusHistory[]
+  deliveryEvents           DeliveryTrackingEvent[]
+  reviews                  Review[]
+  notifications            Notification[]
+  couponUsage              CouponUsage?
 
   @@index([userId, createdAt])
   @@index([restaurantId, createdAt])
@@ -409,7 +428,7 @@ model CouponUsage {
   id        String   @id @default(cuid())
   couponId  String
   userId    String
-  orderId   String   @unique
+  orderId   String  @unique
   discount  Decimal  @db.Decimal(10, 2)
   createdAt DateTime @default(now())
 
