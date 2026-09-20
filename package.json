@@ -7,7 +7,7 @@
   "scripts": {
     "dev:web": "npm run dev -w @khamma-ghani/web",
     "dev:api": "npm run dev -w @khamma-ghani/api",
-    "build": "npm run build -w @khamma-ghani/web && npm run build -w @khamma-ghani/api",
+    "build": "npm run db:generate && npm run build -w @khamma-ghani/web && npm run build -w @khamma-ghani/api",
     "typecheck": "npm run typecheck -w @khamma-ghani/web && npm run typecheck -w @khamma-ghani/api",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
