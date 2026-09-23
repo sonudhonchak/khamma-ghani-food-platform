@@ -1,7 +1,7 @@
 import cors from "cors";
 import express from "express";
-import { z } from "zod";
 import authRouter from "./routes/auth.js";
+import restaurantsRouter from "./routes/restaurants.js";
 import {
   requireAuth,
   type AuthenticatedRequest,
@@ -37,6 +37,10 @@ app.get("/api/v1/auth/me", requireAuth, (req, res) => {
   });
 });
 
+// Restaurant routes
+app.use("/api/v1/restaurants", restaurantsRouter);
+
+// Health check
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
@@ -46,38 +50,12 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// API information
 app.get("/api/v1", (_req, res) => {
   res.json({
     name: "Khamma Ghani API",
     version: "v1",
     status: "online",
-  });
-});
-
-const paginationSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(50).default(20),
-});
-
-app.get("/api/v1/restaurants", (req, res) => {
-  const parsed = paginationSchema.safeParse(req.query);
-
-  if (!parsed.success) {
-    return res.status(400).json({
-      error: {
-        code: "INVALID_QUERY",
-        message: "Invalid pagination parameters.",
-      },
-    });
-  }
-
-  return res.json({
-    data: [],
-    pagination: {
-      page: parsed.data.page,
-      limit: parsed.data.limit,
-      total: 0,
-    },
   });
 });
 
