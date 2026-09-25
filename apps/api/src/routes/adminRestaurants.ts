@@ -65,7 +65,9 @@ router.patch(
   requireAuth,
   requireRole("ADMIN"),
   async (req, res) => {
-    const { restaurantId } = req.params;
+    const restaurantId = Array.isArray(req.params.restaurantId)
+      ? req.params.restaurantId[0]
+      : req.params.restaurantId;
 
     try {
       const restaurant = await prisma.restaurant.findUnique({
