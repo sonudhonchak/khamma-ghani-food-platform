@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import authRouter from "./routes/auth.js";
 import restaurantsRouter from "./routes/restaurants.js";
+import adminRestaurantsRouter from "./routes/adminRestaurants.js";
 import {
   requireAuth,
   type AuthenticatedRequest,
@@ -30,19 +31,22 @@ app.use("/api/v1/auth", authRouter);
 app.get("/api/v1/auth/me", requireAuth, (req, res) => {
   const authenticatedReq = req as AuthenticatedRequest;
 
-  res.json({
+  return res.json({
     data: {
       user: authenticatedReq.user,
     },
   });
 });
 
-// Restaurant routes
+// Public restaurant routes
 app.use("/api/v1/restaurants", restaurantsRouter);
+
+// Admin restaurant management routes
+app.use("/api/v1/admin/restaurants", adminRestaurantsRouter);
 
 // Health check
 app.get("/health", (_req, res) => {
-  res.json({
+  return res.json({
     status: "ok",
     service: "khamma-ghani-api",
     timestamp: new Date().toISOString(),
@@ -52,7 +56,7 @@ app.get("/health", (_req, res) => {
 
 // API information
 app.get("/api/v1", (_req, res) => {
-  res.json({
+  return res.json({
     name: "Khamma Ghani API",
     version: "v1",
     status: "online",
@@ -61,7 +65,7 @@ app.get("/api/v1", (_req, res) => {
 
 // 404 handler
 app.use((_req, res) => {
-  res.status(404).json({
+  return res.status(404).json({
     error: {
       code: "NOT_FOUND",
       message: "The requested API route was not found.",
