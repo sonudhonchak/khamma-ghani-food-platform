@@ -1,76 +1,130 @@
-import cors from "cors";
-import express from "express";
-import authRouter from "./routes/auth.js";
-import restaurantsRouter from "./routes/restaurants.js";
-import adminRestaurantsRouter from "./routes/adminRestaurants.js";
-import {
+import { Router } from "express";
+import { prisma } from "../db.js";
+import { requireAuth } from "../middleware/auth.js";
+import { requireRole } from "../middleware/roles.js";
+
+const router = Router();
+
+// View restaurants awaiting approval
+router.get(
+  "/pending",
   requireAuth,
-  type AuthenticatedRequest,
-} from "./middleware/auth.js";
+  requireRole("ADMIN"),
+  async (_req, res) => {
+    try {
+      const restaurants = await prisma.restaurant.findMany({
+        where: {
+          status: "PENDING",
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+        select: {
+          id: true,
+          ownerId: true,
+          name: true,
+          slug: true,
+          description: true,
+          cuisine: true,
+          address: true,
+          city: true,
+          latitude: true,
+          longitude: true,
+          deliveryTime: true,
+          deliveryFee: true,
+          minimumOrder: true,
+          status: true,
+          openingTime: true,
+          closingTime: true,
+          isAcceptingOrders: true,
+          isBusy: true,
+          createdAt: true,
+        },
+      });
 
-const app = express();
+      return res.json({
+        data: restaurants,
+        total: restaurants.length,
+      });
+    } catch (error) {
+      console.error("Pending restaurants error:", error);
 
-app.disable("x-powered-by");
-
-app.use(
-  cors({
-    origin:
-      process.env.API_CORS_ORIGIN?.split(",").map((origin) => origin.trim()) ?? [
-        "http://localhost:5173",
-      ],
-    credentials: true,
-  })
+      return res.status(500).json({
+        error: {
+          code: "PENDING_RESTAURANTS_FETCH_FAILED",
+          message: "Unable to fetch pending restaurants.",
+        },
+      });
+    }
+  }
 );
 
-app.use(express.json({ limit: "1mb" }));
+// Approve a restaurant
+router.patch(
+  "/:restaurantId/approve",
+  requireAuth,
+  requireRole("ADMIN"),
+  async (req, res) => {
+    const restaurantId = Array.isArray(req.params.restaurantId)
+      ? req.params.restaurantId[0]
+      : req.params.restaurantId;
 
-// Authentication routes
-app.use("/api/v1/auth", authRouter);
+    try {
+      const restaurant = await prisma.restaurant.findUnique({
+        where: {
+          id: restaurantId,
+        },
+      });
 
-// Protected current-user route
-app.get("/api/v1/auth/me", requireAuth, (req, res) => {
-  const authenticatedReq = req as AuthenticatedRequest;
+      if (!restaurant) {
+        return res.status(404).json({
+          error: {
+            code: "RESTAURANT_NOT_FOUND",
+            message: "Restaurant not found.",
+          },
+        });
+      }
 
-  return res.json({
-    data: {
-      user: authenticatedReq.user,
-    },
-  });
-});
+      if (restaurant.status !== "PENDING") {
+        return res.status(409).json({
+          error: {
+            code: "RESTAURANT_NOT_PENDING",
+            message: "Only pending restaurants can be approved.",
+          },
+        });
+      }
 
-// Public restaurant routes
-app.use("/api/v1/restaurants", restaurantsRouter);
+      const updatedRestaurant = await prisma.restaurant.update({
+        where: {
+          id: restaurantId,
+        },
+        data: {
+          status: "ACTIVE",
+        },
+        select: {
+          id: true,
+          ownerId: true,
+          name: true,
+          slug: true,
+          status: true,
+          updatedAt: true,
+        },
+      });
 
-// Admin restaurant management routes
-app.use("/api/v1/admin/restaurants", adminRestaurantsRouter);
+      return res.json({
+        data: updatedRestaurant,
+      });
+    } catch (error) {
+      console.error("Restaurant approval error:", error);
 
-// Health check
-app.get("/health", (_req, res) => {
-  return res.json({
-    status: "ok",
-    service: "khamma-ghani-api",
-    timestamp: new Date().toISOString(),
-    version: "0.1.0",
-  });
-});
+      return res.status(500).json({
+        error: {
+          code: "RESTAURANT_APPROVAL_FAILED",
+          message: "Unable to approve the restaurant.",
+        },
+      });
+    }
+  }
+);
 
-// API information
-app.get("/api/v1", (_req, res) => {
-  return res.json({
-    name: "Khamma Ghani API",
-    version: "v1",
-    status: "online",
-  });
-});
-
-// 404 handler
-app.use((_req, res) => {
-  return res.status(404).json({
-    error: {
-      code: "NOT_FOUND",
-      message: "The requested API route was not found.",
-    },
-  });
-});
-
-export default app;
+export default router;
