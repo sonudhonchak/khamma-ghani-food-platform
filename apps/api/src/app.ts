@@ -3,6 +3,7 @@ import express from "express";
 import authRouter from "./routes/auth.js";
 import restaurantsRouter from "./routes/restaurants.js";
 import adminRestaurantsRouter from "./routes/adminRestaurants.js";
+import restaurantMenuRouter from "./routes/restaurantMenu.js";
 import {
   requireAuth,
   type AuthenticatedRequest,
@@ -38,8 +39,11 @@ app.get("/api/v1/auth/me", requireAuth, (req, res) => {
   });
 });
 
-// Public restaurant routes
+// Public restaurant and restaurant-owner creation routes
 app.use("/api/v1/restaurants", restaurantsRouter);
+
+// Restaurant menu routes
+app.use("/api/v1/restaurants", restaurantMenuRouter);
 
 // Admin restaurant management routes
 app.use("/api/v1/admin/restaurants", adminRestaurantsRouter);
