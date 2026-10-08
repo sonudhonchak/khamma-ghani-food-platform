@@ -1,6 +1,7 @@
 
 import { Router, type Response } from "express";
 import { z } from "zod";
+import { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../db.js";
 import {
   requireAuth,
@@ -33,10 +34,32 @@ function sendError(
 
 const orderIdSchema = z.string().trim().min(1);
 
+const deliveryStatusSchema = z.object({
+  status: z.enum([
+    "ACCEPTED",
+    "AT_RESTAURANT",
+    "PICKED_UP",
+    "ON_THE_WAY",
+    "DELIVERED",
+  ]),
+}).strict();
+
+type DeliveryProgress =
+  z.infer<typeof deliveryStatusSchema>["status"];
+
+const nextStatus: Record<string, DeliveryProgress> = {
+  ASSIGNED: "ACCEPTED",
+  ACCEPTED: "AT_RESTAURANT",
+  AT_RESTAURANT: "PICKED_UP",
+  PICKED_UP: "ON_THE_WAY",
+  ON_THE_WAY: "DELIVERED",
+};
+
 // GET /api/v1/delivery/orders
-// Return orders assigned to the logged-in delivery partner.
 router.get("/", async (req, res) => {
-  const userId = getUserId(req as unknown as AuthenticatedRequest);
+  const userId = getUserId(
+    req as unknown as AuthenticatedRequest
+  );
 
   try {
     const partner = await prisma.deliveryPartner.findUnique({
@@ -97,9 +120,10 @@ router.get("/", async (req, res) => {
 });
 
 // GET /api/v1/delivery/orders/:orderId
-// Show order details only to its assigned delivery partner.
 router.get("/:orderId", async (req, res) => {
-  const userId = getUserId(req as unknown as AuthenticatedRequest);
+  const userId = getUserId(
+    req as unknown as AuthenticatedRequest
+  );
   const orderId = getParam(req.params.orderId);
 
   if (!orderIdSchema.safeParse(orderId).success) {
@@ -195,6 +219,315 @@ router.get("/:orderId", async (req, res) => {
       500,
       "DELIVERY_ORDER_FETCH_FAILED",
       "Unable to fetch assigned delivery order."
+    );
+  }
+});
+
+// PATCH /api/v1/delivery/orders/:orderId/status
+// Update delivery progress in the required sequence.
+router.patch("/:orderId/status", async (req, res) => {
+  const userId = getUserId(
+    req as unknown as AuthenticatedRequest
+  );
+  const orderId = getParam(req.params.orderId);
+
+  if (!orderIdSchema.safeParse(orderId).success) {
+    return sendError(
+      res,
+      400,
+      "INVALID_ORDER_ID",
+      "A valid order ID is required."
+    );
+  }
+
+  const parsed = deliveryStatusSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return sendError(
+      res,
+      400,
+      "INVALID_STATUS",
+      "Provide a valid delivery status."
+    );
+  }
+
+  const requestedStatus = parsed.data.status;
+
+  try {
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const partner = await tx.deliveryPartner.findUnique({
+          where: { userId },
+          select: {
+            id: true,
+            status: true,
+            isAvailable: true,
+            user: {
+              select: {
+                status: true,
+                role: true,
+              },
+            },
+          },
+        });
+
+        if (
+          !partner ||
+          partner.user.status !== "ACTIVE" ||
+          partner.user.role !== "DELIVERY_PARTNER"
+        ) {
+          return {
+            error: {
+              status: 403,
+              code: "PARTNER_NOT_ACTIVE",
+              message: "Delivery partner is not active.",
+            },
+          };
+        }
+
+        const order = await tx.order.findFirst({
+          where: {
+            id: orderId,
+            deliveryPartnerId: partner.id,
+          },
+          select: {
+            id: true,
+            orderStatus: true,
+            paymentMethod: true,
+            paymentStatus: true,
+          },
+        });
+
+        if (!order) {
+          return {
+            error: {
+              status: 404,
+              code: "ORDER_NOT_FOUND",
+              message:
+                "Order not found or not assigned to this partner.",
+            },
+          };
+        }
+
+        if (
+          order.orderStatus === "CANCELLED" ||
+          order.orderStatus === "DELIVERED"
+        ) {
+          return {
+            error: {
+              status: 409,
+              code: "ORDER_ALREADY_CLOSED",
+              message: "This order is already closed.",
+            },
+          };
+        }
+
+        if (
+          nextStatus[partner.status] !== requestedStatus
+        ) {
+          return {
+            error: {
+              status: 409,
+              code: "INVALID_STATUS_TRANSITION",
+              message:
+                "Delivery statuses must be updated in sequence.",
+            },
+          };
+        }
+
+        if (
+          order.orderStatus !== "READY_FOR_PICKUP" &&
+          order.orderStatus !== "PICKED_UP" &&
+          order.orderStatus !== "OUT_FOR_DELIVERY"
+        ) {
+          return {
+            error: {
+              status: 409,
+              code: "ORDER_NOT_READY",
+              message:
+                "The restaurant order is not ready for delivery.",
+            },
+          };
+        }
+
+        // Enforce matching order status at each milestone.
+        if (
+          (requestedStatus === "ACCEPTED" ||
+            requestedStatus === "AT_RESTAURANT" ||
+            requestedStatus === "PICKED_UP") &&
+          order.orderStatus !== "READY_FOR_PICKUP"
+        ) {
+          return {
+            error: {
+              status: 409,
+              code: "ORDER_STATUS_MISMATCH",
+              message: "Order must be READY_FOR_PICKUP.",
+            },
+          };
+        }
+
+        if (
+          requestedStatus === "ON_THE_WAY" &&
+          order.orderStatus !== "PICKED_UP"
+        ) {
+          return {
+            error: {
+              status: 409,
+              code: "ORDER_STATUS_MISMATCH",
+              message: "Order must be PICKED_UP.",
+            },
+          };
+        }
+
+        if (
+          requestedStatus === "DELIVERED" &&
+          order.orderStatus !== "OUT_FOR_DELIVERY"
+        ) {
+          return {
+            error: {
+              status: 409,
+              code: "ORDER_STATUS_MISMATCH",
+              message: "Order must be OUT_FOR_DELIVERY.",
+            },
+          };
+        }
+
+        const partnerUpdated = await tx.deliveryPartner.updateMany({
+          where: {
+            id: partner.id,
+            status: partner.status,
+            isAvailable: false,
+          },
+          data: {
+            status: requestedStatus,
+            isAvailable: false,
+          },
+        });
+
+        if (partnerUpdated.count !== 1) {
+          throw new Error("DELIVERY_UPDATE_CONFLICT");
+        }
+
+        let newOrderStatus:
+          | "PICKED_UP"
+          | "OUT_FOR_DELIVERY"
+          | "DELIVERED"
+          | null = null;
+
+        if (requestedStatus === "PICKED_UP") {
+          newOrderStatus = "PICKED_UP";
+        } else if (requestedStatus === "ON_THE_WAY") {
+          newOrderStatus = "OUT_FOR_DELIVERY";
+        } else if (requestedStatus === "DELIVERED") {
+          newOrderStatus = "DELIVERED";
+        }
+
+        if (newOrderStatus) {
+          const updated = await tx.order.updateMany({
+            where: {
+              id: orderId,
+              deliveryPartnerId: partner.id,
+              orderStatus: order.orderStatus,
+            },
+            data: {
+              orderStatus: newOrderStatus,
+            },
+          });
+
+          if (updated.count !== 1) {
+            throw new Error("DELIVERY_UPDATE_CONFLICT");
+          }
+
+          await tx.orderStatusHistory.create({
+            data: {
+              orderId,
+              status: newOrderStatus,
+              note: "Updated by delivery partner.",
+            },
+          });
+        }
+
+        await tx.deliveryTrackingEvent.create({
+          data: {
+            orderId,
+            deliveryPartnerId: partner.id,
+            status: requestedStatus,
+            note: `Delivery status updated to ${requestedStatus}.`,
+          },
+        });
+
+        const updatedOrder = await tx.order.findUnique({
+          where: { id: orderId },
+          select: {
+            id: true,
+            orderNumber: true,
+            orderStatus: true,
+            paymentMethod: true,
+            paymentStatus: true,
+          },
+        });
+
+        return {
+          order: updatedOrder,
+          deliveryStatus: requestedStatus,
+        };
+      },
+      {
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 5000,
+        timeout: 15000,
+      }
+    );
+
+    if ("error" in result && result.error) {
+      return sendError(
+        res,
+        result.error.status,
+        result.error.code,
+        result.error.message
+      );
+    }
+
+    return res.json({
+      data: {
+        order: result.order,
+        deliveryStatus: result.deliveryStatus,
+      },
+      message: "Delivery status updated successfully.",
+    });
+  } catch (error) {
+    console.error("Update delivery status error:", error);
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2034"
+    ) {
+      return sendError(
+        res,
+        409,
+        "DELIVERY_UPDATE_CONFLICT",
+        "Concurrent update detected. Please retry."
+      );
+    }
+
+    if (
+      error instanceof Error &&
+      error.message === "DELIVERY_UPDATE_CONFLICT"
+    ) {
+      return sendError(
+        res,
+        409,
+        "DELIVERY_UPDATE_CONFLICT",
+        "Delivery state changed. Refresh and retry."
+      );
+    }
+
+    return sendError(
+      res,
+      500,
+      "DELIVERY_STATUS_UPDATE_FAILED",
+      "Unable to update delivery status."
     );
   }
 });
