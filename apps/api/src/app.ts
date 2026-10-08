@@ -1,5 +1,4 @@
 
-
 import cors from "cors";
 import express from "express";
 import authRouter from "./routes/auth.js";
@@ -108,3 +107,5 @@ app.use((_req, res) => {
 });
 
 export default app;
+
+
