@@ -1,5 +1,5 @@
 
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import {
@@ -21,7 +21,7 @@ function getParam(value: string | string[] | undefined): string {
 }
 
 function sendError(
-  res: any,
+  res: Response,
   status: number,
   code: string,
   message: string
@@ -34,9 +34,9 @@ function sendError(
 const orderIdSchema = z.string().trim().min(1);
 
 // GET /api/v1/delivery/orders
-// Only return orders assigned to the logged-in delivery partner.
+// Return orders assigned to the logged-in delivery partner.
 router.get("/", async (req, res) => {
-  const userId = getUserId(req as AuthenticatedRequest);
+  const userId = getUserId(req as unknown as AuthenticatedRequest);
 
   try {
     const partner = await prisma.deliveryPartner.findUnique({
@@ -97,9 +97,9 @@ router.get("/", async (req, res) => {
 });
 
 // GET /api/v1/delivery/orders/:orderId
-// Full delivery information only for the assigned partner.
+// Show order details only to its assigned delivery partner.
 router.get("/:orderId", async (req, res) => {
-  const userId = getUserId(req as AuthenticatedRequest);
+  const userId = getUserId(req as unknown as AuthenticatedRequest);
   const orderId = getParam(req.params.orderId);
 
   if (!orderIdSchema.safeParse(orderId).success) {
@@ -200,3 +200,4 @@ router.get("/:orderId", async (req, res) => {
 });
 
 export default router;
+
