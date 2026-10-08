@@ -1,4 +1,6 @@
-import { Link, Route, Routes } from "react-router-dom";
+
+import { useEffect, useMemo, useState } from "react";
+import { Link, Route, Routes, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   Bike,
@@ -8,10 +10,42 @@ import {
   Search,
   ShieldCheck,
   ShoppingBag,
-  Star,
   Store,
-  Utensils
+  Utensils,
 } from "lucide-react";
+
+const API_BASE = "https://khamma-ghani-api.vercel.app";
+
+type Restaurant = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  logo: string | null;
+  coverImage: string | null;
+  cuisine: string;
+  address: string;
+  city: string;
+  rating: string;
+  deliveryTime: number;
+  deliveryFee: string;
+  minimumOrder: string;
+  status: string;
+  openingTime: string;
+  closingTime: string;
+  isAcceptingOrders: boolean;
+  isBusy: boolean;
+};
+
+type RestaurantResponse = {
+  data: Restaurant[];
+  pagination?: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+};
 
 const categories = [
   { label: "Biryani", icon: "🍛" },
@@ -19,13 +53,7 @@ const categories = [
   { label: "Thali", icon: "🥘" },
   { label: "North Indian", icon: "🫓" },
   { label: "South Indian", icon: "🥞" },
-  { label: "Sweets", icon: "🍮" }
-];
-
-const restaurants = [
-  { name: "Marwar Rasoi", cuisine: "Rajasthani • North Indian", rating: "4.7", time: "25–30 min", price: "₹₹" },
-  { name: "Thar Tadka", cuisine: "Biryani • Mughlai", rating: "4.5", time: "30–35 min", price: "₹₹" },
-  { name: "Padharo Kitchen", cuisine: "Thali • Indian", rating: "4.8", time: "20–25 min", price: "₹₹" }
+  { label: "Sweets", icon: "🍮" },
 ];
 
 function Shell({ children }: { children: React.ReactNode }) {
@@ -34,52 +62,105 @@ function Shell({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-50 border-b border-orange-100/80 bg-[#fffaf4]/90 backdrop-blur-xl">
         <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3 sm:px-6 lg:px-8">
           <Link to="/" className="shrink-0">
-            <div className="text-xl font-black tracking-tight text-orange-600">Khamma Ghani</div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-400">Padharo Sa</div>
+            <div className="text-xl font-black tracking-tight text-orange-600">
+              Khamma Ghani
+            </div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.25em] text-slate-400">
+              Padharo Sa
+            </div>
           </Link>
 
-          <button className="hidden items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-orange-50 sm:flex">
+          <Link
+            to="/restaurants"
+            className="hidden items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-orange-50 sm:flex"
+          >
             <MapPin size={17} className="text-orange-600" />
-            <span className="max-w-40 truncate text-sm font-semibold">Choose your location</span>
+            <span className="max-w-40 truncate text-sm font-semibold">
+              Explore restaurants
+            </span>
             <ChevronRight size={15} className="text-slate-400" />
-          </button>
+          </Link>
 
           <div className="ml-auto flex items-center gap-2">
-            <Link to="/search" className="rounded-xl p-2.5 hover:bg-orange-50" aria-label="Search">
+            <Link
+              to="/search"
+              className="rounded-xl p-2.5 hover:bg-orange-50"
+              aria-label="Search"
+            >
               <Search size={20} />
             </Link>
-            <Link to="/cart" className="relative rounded-xl p-2.5 hover:bg-orange-50" aria-label="Cart">
+
+            <Link
+              to="/cart"
+              className="relative rounded-xl p-2.5 hover:bg-orange-50"
+              aria-label="Cart"
+            >
               <ShoppingBag size={20} />
-              <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-600 px-1 text-[9px] font-bold text-white">0</span>
+              <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-600 px-1 text-[9px] font-bold text-white">
+                0
+              </span>
             </Link>
-            <Link to="/login" className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800">
+
+            <Link
+              to="/login"
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+            >
               Login
             </Link>
           </div>
         </div>
       </header>
+
       {children}
+
       <footer className="mt-16 border-t border-orange-100 bg-white">
-        <div className="mx-auto grid max-w-7xl gap-8 px-4 py-10 sm:grid-cols-2 lg:grid-cols-4 sm:px-6 lg:px-8">
+        <div className="mx-auto grid max-w-7xl gap-8 px-4 py-10 sm:grid-cols-2 sm:px-6 lg:grid-cols-4 lg:px-8">
           <div>
-            <div className="text-lg font-black text-orange-600">Khamma Ghani</div>
-            <p className="mt-2 text-sm leading-6 text-slate-500">A modern local food-delivery platform built for real customers and real restaurants.</p>
+            <div className="text-lg font-black text-orange-600">
+              Khamma Ghani
+            </div>
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              A modern local food-delivery platform built for real customers
+              and real restaurants.
+            </p>
           </div>
+
           <div>
             <h3 className="font-bold">Platform</h3>
-            <p className="mt-3 text-sm text-slate-500">Restaurants</p>
-            <p className="mt-2 text-sm text-slate-500">Offers</p>
-            <p className="mt-2 text-sm text-slate-500">Track order</p>
+            <Link
+              to="/restaurants"
+              className="mt-3 block text-sm text-slate-500"
+            >
+              Restaurants
+            </Link>
+            <Link
+              to="/search"
+              className="mt-2 block text-sm text-slate-500"
+            >
+              Search
+            </Link>
           </div>
+
           <div>
             <h3 className="font-bold">Partners</h3>
-            <p className="mt-3 text-sm text-slate-500">Restaurant partners</p>
-            <p className="mt-2 text-sm text-slate-500">Delivery partners</p>
+            <p className="mt-3 text-sm text-slate-500">
+              Restaurant partners
+            </p>
+            <p className="mt-2 text-sm text-slate-500">
+              Delivery partners
+            </p>
           </div>
+
           <div>
             <h3 className="font-bold">Trust</h3>
-            <div className="mt-3 flex items-center gap-2 text-sm text-slate-500"><ShieldCheck size={16} /> Secure architecture</div>
-            <div className="mt-2 flex items-center gap-2 text-sm text-slate-500"><Bike size={16} /> Local delivery</div>
+            <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
+              <ShieldCheck size={16} />
+              Secure architecture
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-sm text-slate-500">
+              <Bike size={16} />
+              Local delivery
+            </div>
           </div>
         </div>
       </footer>
@@ -87,7 +168,230 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
+function useRestaurants() {
+  const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadRestaurants() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const response = await fetch(
+          `${API_BASE}/api/v1/restaurants`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
+            signal: controller.signal,
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Unable to load restaurants (${response.status}).`
+          );
+        }
+
+        const result: RestaurantResponse = await response.json();
+
+        if (!Array.isArray(result.data)) {
+          throw new Error("Unexpected restaurant response.");
+        }
+
+        setRestaurants(
+          result.data.filter(
+            (restaurant) => restaurant.status === "ACTIVE"
+          )
+        );
+      } catch (err) {
+        if (controller.signal.aborted) return;
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load restaurants."
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadRestaurants();
+
+    return () => controller.abort();
+  }, []);
+
+  return { restaurants, loading, error };
+}
+
+function RestaurantCard({
+  restaurant,
+}: {
+  restaurant: Restaurant;
+}) {
+  const canOrder =
+    restaurant.isAcceptingOrders && !restaurant.isBusy;
+
+  return (
+    <article className="overflow-hidden rounded-3xl border border-orange-100 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+      <div className="relative h-40 overflow-hidden bg-gradient-to-br from-orange-100 via-amber-50 to-orange-200">
+        {restaurant.coverImage ? (
+          <img
+            src={restaurant.coverImage}
+            alt={restaurant.name}
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Utensils size={52} className="text-orange-400" />
+          </div>
+        )}
+
+        <span className="absolute bottom-3 left-3 rounded-xl bg-white/95 px-3 py-2 text-xs font-bold">
+          {restaurant.city}
+        </span>
+
+        <span className="absolute bottom-3 right-3 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white">
+          {restaurant.deliveryTime} min
+        </span>
+      </div>
+
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="text-lg font-black">
+            {restaurant.name}
+          </h3>
+
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
+              canOrder
+                ? "bg-green-100 text-green-700"
+                : "bg-amber-100 text-amber-800"
+            }`}
+          >
+            {canOrder
+              ? "Accepting orders"
+              : restaurant.isBusy
+                ? "Busy"
+                : "Not accepting orders"}
+          </span>
+        </div>
+
+        <p className="mt-2 text-sm text-slate-500">
+          {restaurant.cuisine}
+        </p>
+
+        <p className="mt-2 flex items-center gap-1 text-xs text-slate-500">
+          <MapPin size={14} />
+          {restaurant.address}
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-3 border-t border-orange-100 pt-4 text-xs font-semibold text-slate-600">
+          <span>
+            Delivery ₹{restaurant.deliveryFee}
+          </span>
+          <span>
+            Min. order ₹{restaurant.minimumOrder}
+          </span>
+        </div>
+
+        <p className="mt-3 text-xs text-slate-500">
+          Hours: {restaurant.openingTime}–{restaurant.closingTime}
+        </p>
+      </div>
+    </article>
+  );
+}
+
+function RestaurantResults({
+  restaurants,
+  loading,
+  error,
+}: {
+  restaurants: Restaurant[];
+  loading: boolean;
+  error: string | null;
+}) {
+  if (loading) {
+    return (
+      <div
+        className="grid gap-4 md:grid-cols-2 lg:grid-cols-3"
+        aria-busy="true"
+      >
+        {[1, 2, 3].map((item) => (
+          <div
+            key={item}
+            className="h-80 animate-pulse rounded-3xl bg-orange-100"
+          />
+        ))}
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div
+        role="alert"
+        className="rounded-3xl border border-red-100 bg-white p-8 text-center"
+      >
+        <h3 className="font-bold text-red-700">
+          Restaurants couldn't be loaded
+        </h3>
+        <p className="mt-2 text-sm text-slate-500">
+          {error}
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="mt-4 rounded-xl bg-slate-900 px-5 py-2 text-sm font-bold text-white"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (restaurants.length === 0) {
+    return (
+      <div className="rounded-3xl border border-orange-100 bg-white p-10 text-center">
+        <Store
+          size={36}
+          className="mx-auto text-orange-500"
+        />
+        <h3 className="mt-4 text-lg font-bold">
+          No restaurants found
+        </h3>
+        <p className="mt-2 text-sm text-slate-500">
+          Try another restaurant name or cuisine.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {restaurants.map((restaurant) => (
+        <RestaurantCard
+          key={restaurant.id}
+          restaurant={restaurant}
+        />
+      ))}
+    </div>
+  );
+}
+
 function Home() {
+  const { restaurants, loading, error } = useRestaurants();
+  const [search, setSearch] = useState("");
+
   return (
     <Shell>
       <main>
@@ -95,23 +399,47 @@ function Home() {
           <div className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-orange-500 via-orange-600 to-amber-500 p-6 text-white shadow-2xl shadow-orange-200 sm:p-10 lg:p-14">
             <div className="max-w-2xl">
               <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1.5 text-xs font-bold backdrop-blur">
-                <Utensils size={14} /> Fresh food. Local taste.
+                <Utensils size={14} />
+                Fresh food. Local taste.
               </div>
+
               <h1 className="text-4xl font-black leading-[1.05] tracking-tight sm:text-5xl lg:text-6xl">
                 Padharo Sa, your next meal is waiting.
               </h1>
+
               <p className="mt-5 max-w-xl text-base leading-7 text-orange-50 sm:text-lg">
-                Discover trusted restaurants, order your favourites and follow every step of your delivery.
+                Discover trusted restaurants, order your favourites
+                and follow every step of your delivery.
               </p>
 
-              <div className="mt-7 flex max-w-xl items-center gap-2 rounded-2xl bg-white p-2 shadow-xl">
-                <Search className="ml-2 shrink-0 text-slate-400" size={21} />
-                <input
-                  className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm text-slate-900 outline-none"
-                  placeholder="Search for biryani, pizza, thali..."
+              <form
+                className="mt-7 flex max-w-xl items-center gap-2 rounded-2xl bg-white p-2 shadow-xl"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  window.location.href =
+                    `/search?q=${encodeURIComponent(search)}`;
+                }}
+              >
+                <Search
+                  className="ml-2 shrink-0 text-slate-400"
+                  size={21}
                 />
-                <Link to="/search" className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white">Search</Link>
-              </div>
+                <input
+                  value={search}
+                  onChange={(event) =>
+                    setSearch(event.target.value)
+                  }
+                  className="min-w-0 flex-1 bg-transparent px-2 py-3 text-sm text-slate-900 outline-none"
+                  placeholder="Search restaurants or cuisines..."
+                  aria-label="Search restaurants"
+                />
+                <button
+                  type="submit"
+                  className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
+                >
+                  Search
+                </button>
+              </form>
             </div>
           </div>
         </section>
@@ -119,17 +447,34 @@ function Home() {
         <section className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex items-end justify-between">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-600">Explore</p>
-              <h2 className="mt-1 text-2xl font-black">What are you craving?</h2>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-600">
+                Explore
+              </p>
+              <h2 className="mt-1 text-2xl font-black">
+                What are you craving?
+              </h2>
             </div>
-            <Link to="/search" className="hidden items-center gap-1 text-sm font-bold text-orange-600 sm:flex">View all <ArrowRight size={16} /></Link>
+            <Link
+              to="/search"
+              className="hidden items-center gap-1 text-sm font-bold text-orange-600 sm:flex"
+            >
+              View all <ArrowRight size={16} />
+            </Link>
           </div>
 
           <div className="mt-5 grid grid-cols-3 gap-3 sm:grid-cols-6">
             {categories.map((category) => (
-              <Link key={category.label} to="/search" className="group rounded-2xl border border-orange-100 bg-white p-4 text-center shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                <div className="text-3xl">{category.icon}</div>
-                <div className="mt-2 text-xs font-bold sm:text-sm">{category.label}</div>
+              <Link
+                key={category.label}
+                to={`/search?q=${encodeURIComponent(category.label)}`}
+                className="group rounded-2xl border border-orange-100 bg-white p-4 text-center shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+              >
+                <div className="text-3xl">
+                  {category.icon}
+                </div>
+                <div className="mt-2 text-xs font-bold sm:text-sm">
+                  {category.label}
+                </div>
               </Link>
             ))}
           </div>
@@ -138,31 +483,27 @@ function Home() {
         <section className="mx-auto mt-12 max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex items-end justify-between">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-600">Near you</p>
-              <h2 className="mt-1 text-2xl font-black">Popular restaurants</h2>
+              <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-600">
+                Near you
+              </p>
+              <h2 className="mt-1 text-2xl font-black">
+                Popular restaurants
+              </h2>
             </div>
-            <Link to="/restaurants" className="hidden items-center gap-1 text-sm font-bold text-orange-600 sm:flex">See all <ArrowRight size={16} /></Link>
+            <Link
+              to="/restaurants"
+              className="hidden items-center gap-1 text-sm font-bold text-orange-600 sm:flex"
+            >
+              See all <ArrowRight size={16} />
+            </Link>
           </div>
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {restaurants.map((restaurant) => (
-              <Link key={restaurant.name} to="/restaurants" className="overflow-hidden rounded-3xl border border-orange-100 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
-                <div className="h-36 bg-gradient-to-br from-orange-100 via-amber-50 to-orange-200 p-5">
-                  <div className="flex h-full items-end justify-between">
-                    <div className="rounded-xl bg-white/80 px-3 py-2 text-xs font-black backdrop-blur">{restaurant.price}</div>
-                    <div className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white">{restaurant.time}</div>
-                  </div>
-                </div>
-                <div className="p-5">
-                  <h3 className="text-lg font-black">{restaurant.name}</h3>
-                  <p className="mt-1 text-sm text-slate-500">{restaurant.cuisine}</p>
-                  <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
-                    <span className="inline-flex items-center gap-1 text-emerald-700"><Star size={14} fill="currentColor" /> {restaurant.rating}</span>
-                    <span className="inline-flex items-center gap-1"><Clock3 size={14} /> {restaurant.time}</span>
-                  </div>
-                </div>
-              </Link>
-            ))}
+          <div className="mt-5">
+            <RestaurantResults
+              restaurants={restaurants}
+              loading={loading}
+              error={error}
+            />
           </div>
         </section>
       </main>
@@ -170,14 +511,106 @@ function Home() {
   );
 }
 
-function SimplePage({ title, text }: { title: string; text: string }) {
+function RestaurantsPage({
+  searchMode = false,
+}: {
+  searchMode?: boolean;
+}) {
+  const { restaurants, loading, error } = useRestaurants();
+  const [params, setParams] = useSearchParams();
+  const query = params.get("q") ?? "";
+
+  const filtered = useMemo(() => {
+    const term = query.trim().toLowerCase();
+
+    if (!term) return restaurants;
+
+    return restaurants.filter((restaurant) =>
+      [
+        restaurant.name,
+        restaurant.cuisine,
+        restaurant.city,
+        restaurant.description ?? "",
+      ].some((value) => value.toLowerCase().includes(term))
+    );
+  }, [restaurants, query]);
+
+  return (
+    <Shell>
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-600">
+          Khamma Ghani
+        </p>
+
+        <h1 className="mt-2 text-3xl font-black sm:text-4xl">
+          {searchMode ? "Search restaurants" : "Explore restaurants"}
+        </h1>
+
+        <p className="mt-3 text-sm text-slate-500">
+          Discover restaurants and cuisines available on our platform.
+        </p>
+
+        <div className="mt-7 flex items-center gap-3 rounded-2xl border border-orange-100 bg-white px-4 py-3">
+          <Search size={20} className="text-orange-500" />
+          <input
+            value={query}
+            onChange={(event) => {
+              const value = event.target.value;
+              setParams(
+                value ? { q: value } : {},
+                { replace: true }
+              );
+            }}
+            className="w-full bg-transparent text-sm outline-none"
+            placeholder="Search by restaurant or cuisine"
+            aria-label="Search restaurants"
+          />
+        </div>
+
+        <div className="mt-8">
+          {!loading && !error && (
+            <p className="mb-4 text-sm font-semibold text-slate-500">
+              {filtered.length} restaurant
+              {filtered.length === 1 ? "" : "s"} found
+            </p>
+          )}
+
+          <RestaurantResults
+            restaurants={filtered}
+            loading={loading}
+            error={error}
+          />
+        </div>
+      </main>
+    </Shell>
+  );
+}
+
+function SimplePage({
+  title,
+  text,
+}: {
+  title: string;
+  text: string;
+}) {
   return (
     <Shell>
       <main className="mx-auto max-w-4xl px-4 py-16 text-center sm:px-6">
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-orange-100 text-orange-600"><Store /></div>
-        <h1 className="mt-6 text-4xl font-black">{title}</h1>
-        <p className="mx-auto mt-4 max-w-xl text-slate-500">{text}</p>
-        <Link to="/" className="mt-7 inline-flex rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white">Back home</Link>
+        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-orange-100 text-orange-600">
+          <Store />
+        </div>
+        <h1 className="mt-6 text-4xl font-black">
+          {title}
+        </h1>
+        <p className="mx-auto mt-4 max-w-xl text-slate-500">
+          {text}
+        </p>
+        <Link
+          to="/"
+          className="mt-7 inline-flex rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white"
+        >
+          Back home
+        </Link>
       </main>
     </Shell>
   );
@@ -187,10 +620,46 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Home />} />
-      <Route path="/restaurants" element={<SimplePage title="Restaurant discovery" text="The real restaurant listing, location-aware search, filters and sorting are part of the next customer-experience stage." />} />
-      <Route path="/search" element={<SimplePage title="Search foundation" text="Search will connect to the backend and cover restaurants, food items, cuisines and categories." />} />
-      <Route path="/cart" element={<SimplePage title="Cart foundation" text="The cart will be connected to server-validated prices, quantities, add-ons, coupons and totals." />} />
-      <Route path="/login" element={<SimplePage title="Secure login" text="Authentication and role-based access control are being built as a real backend feature, not simulated in the browser." />} />
+
+      <Route
+        path="/restaurants"
+        element={<RestaurantsPage />}
+      />
+
+      <Route
+        path="/search"
+        element={<RestaurantsPage searchMode />}
+      />
+
+      <Route
+        path="/cart"
+        element={
+          <SimplePage
+            title="Cart foundation"
+            text="The cart will be connected to server-validated prices, quantities, add-ons, coupons and totals."
+          />
+        }
+      />
+
+      <Route
+        path="/login"
+        element={
+          <SimplePage
+            title="Secure login"
+            text="Authentication and role-based access control will be connected to our existing backend."
+          />
+        }
+      />
+
+      <Route
+        path="*"
+        element={
+          <SimplePage
+            title="Page not found"
+            text="The page you requested does not exist."
+          />
+        }
+      />
     </Routes>
   );
 }
