@@ -1,4 +1,5 @@
 
+
 import { Router, type Response } from "express";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
@@ -34,15 +35,17 @@ function sendError(
 
 const orderIdSchema = z.string().trim().min(1);
 
-const deliveryStatusSchema = z.object({
-  status: z.enum([
-    "ACCEPTED",
-    "AT_RESTAURANT",
-    "PICKED_UP",
-    "ON_THE_WAY",
-    "DELIVERED",
-  ]),
-}).strict();
+const deliveryStatusSchema = z
+  .object({
+    status: z.enum([
+      "ACCEPTED",
+      "AT_RESTAURANT",
+      "PICKED_UP",
+      "ON_THE_WAY",
+      "DELIVERED",
+    ]),
+  })
+  .strict();
 
 type DeliveryProgress =
   z.infer<typeof deliveryStatusSchema>["status"];
@@ -224,7 +227,6 @@ router.get("/:orderId", async (req, res) => {
 });
 
 // PATCH /api/v1/delivery/orders/:orderId/status
-// Update delivery progress in the required sequence.
 router.patch("/:orderId/status", async (req, res) => {
   const userId = getUserId(
     req as unknown as AuthenticatedRequest
@@ -350,7 +352,6 @@ router.patch("/:orderId/status", async (req, res) => {
           };
         }
 
-        // Enforce matching order status at each milestone.
         if (
           (requestedStatus === "ACCEPTED" ||
             requestedStatus === "AT_RESTAURANT" ||
@@ -392,17 +393,18 @@ router.patch("/:orderId/status", async (req, res) => {
           };
         }
 
-        const partnerUpdated = await tx.deliveryPartner.updateMany({
-          where: {
-            id: partner.id,
-            status: partner.status,
-            isAvailable: false,
-          },
-          data: {
-            status: requestedStatus,
-            isAvailable: false,
-          },
-        });
+        const partnerUpdated =
+          await tx.deliveryPartner.updateMany({
+            where: {
+              id: partner.id,
+              status: partner.status,
+              isAvailable: false,
+            },
+            data: {
+              status: requestedStatus,
+              isAvailable: false,
+            },
+          });
 
         if (partnerUpdated.count !== 1) {
           throw new Error("DELIVERY_UPDATE_CONFLICT");
@@ -532,5 +534,5 @@ router.patch("/:orderId/status", async (req, res) => {
   }
 });
 
+// Delivery status PATCH route deployment synchronization.
 export default router;
-
