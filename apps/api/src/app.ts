@@ -1,9 +1,11 @@
+
 import cors from "cors";
 import express from "express";
 import authRouter from "./routes/auth.js";
 import restaurantsRouter from "./routes/restaurants.js";
 import adminRestaurantsRouter from "./routes/adminRestaurants.js";
 import restaurantMenuRouter from "./routes/restaurantMenu.js";
+import cartRouter from "./routes/cart.js";
 import {
   requireAuth,
   type AuthenticatedRequest,
@@ -47,6 +49,9 @@ app.use("/api/v1/restaurants", restaurantMenuRouter);
 
 // Admin restaurant management routes
 app.use("/api/v1/admin/restaurants", adminRestaurantsRouter);
+
+// Customer cart routes
+app.use("/api/v1/cart", cartRouter);
 
 // Health check
 app.get("/health", (_req, res) => {
