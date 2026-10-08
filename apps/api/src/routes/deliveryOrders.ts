@@ -1,5 +1,4 @@
 
-
 import { Router, type Response } from "express";
 import { z } from "zod";
 import { Prisma } from "../generated/prisma/client.js";
@@ -458,6 +457,50 @@ router.patch("/:orderId/status", async (req, res) => {
           },
         });
 
+        // Automatically make the partner eligible for another assignment
+        // after delivery, provided no other active orders are assigned.
+        // This does not modify the order payment or COD collection state.
+        if (requestedStatus === "DELIVERED") {
+          const available = await tx.deliveryPartner.updateMany({
+            where: {
+              id: partner.id,
+              status: "DELIVERED",
+              isAvailable: false,
+              user: {
+                role: "DELIVERY_PARTNER",
+                status: "ACTIVE",
+              },
+              orders: {
+                none: {
+                  orderStatus: {
+                    in: [
+                      "PLACED",
+                      "CONFIRMED",
+                      "PREPARING",
+                      "READY_FOR_PICKUP",
+                      "PICKED_UP",
+                      "OUT_FOR_DELIVERY",
+                    ],
+                  },
+                },
+              },
+            },
+            data: {
+              status: "AVAILABLE",
+              isAvailable: true,
+            },
+          });
+
+          // If another active assignment exists, leave the partner
+          // unavailable rather than permitting another assignment.
+          if (available.count !== 1) {
+            console.info(
+              "Delivery completed; partner not reset because another active order exists.",
+              { partnerId: partner.id, orderId }
+            );
+          }
+        }
+
         const updatedOrder = await tx.order.findUnique({
           where: { id: orderId },
           select: {
@@ -536,3 +579,5 @@ router.patch("/:orderId/status", async (req, res) => {
 
 // Delivery status PATCH route deployment synchronization.
 export default router;
+
+
