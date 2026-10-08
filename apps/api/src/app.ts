@@ -6,6 +6,7 @@ import restaurantsRouter from "./routes/restaurants.js";
 import adminRestaurantsRouter from "./routes/adminRestaurants.js";
 import restaurantMenuRouter from "./routes/restaurantMenu.js";
 import cartRouter from "./routes/cart.js";
+import addressesRouter from "./routes/addresses.js";
 import {
   requireAuth,
   type AuthenticatedRequest,
@@ -52,6 +53,9 @@ app.use("/api/v1/admin/restaurants", adminRestaurantsRouter);
 
 // Customer cart routes
 app.use("/api/v1/cart", cartRouter);
+
+// Customer delivery address routes
+app.use("/api/v1/addresses", addressesRouter);
 
 // Health check
 app.get("/health", (_req, res) => {
