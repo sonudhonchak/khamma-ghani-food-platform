@@ -33,7 +33,7 @@ const assignOrderSchema = z.object({
 }).strict();
 
 function param(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? value[0] : value ?? "";
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
 }
 
 function sendError(
@@ -198,7 +198,8 @@ router.get("/", async (_req, res) => {
 });
 
 // PATCH /api/v1/admin/delivery-partners/:partnerId/availability
-// Admin controls whether a partner can receive assignments.
+// Admin can change availability for AVAILABLE partners
+// or recover partners after a completed delivery.
 router.patch("/:partnerId/availability", async (req, res) => {
   const parsed = availabilitySchema.safeParse(req.body);
 
@@ -214,88 +215,132 @@ router.patch("/:partnerId/availability", async (req, res) => {
   const partnerId = param(req.params.partnerId);
 
   try {
-    const partner = await prisma.deliveryPartner.findUnique({
-      where: { id: partnerId },
-      include: {
-        user: {
-          select: {
-            status: true,
-            role: true,
-          },
-        },
-      },
-    });
-
-    if (!partner) {
-      return sendError(
-        res,
-        404,
-        "PARTNER_NOT_FOUND",
-        "Delivery partner not found."
-      );
-    }
-
-    if (
-      partner.user.status !== "ACTIVE" ||
-      partner.user.role !== "DELIVERY_PARTNER"
-    ) {
-      return sendError(
-        res,
-        409,
-        "PARTNER_INACTIVE",
-        "Delivery partner account is not active."
-      );
-    }
-
-    const updatedCount = await prisma.deliveryPartner.updateMany({
-      where: {
-        id: partnerId,
-        status: "AVAILABLE",
-        orders: {
-          none: {
-            orderStatus: {
-              in: [
-                "PLACED",
-                "CONFIRMED",
-                "PREPARING",
-                "READY_FOR_PICKUP",
-                "PICKED_UP",
-                "OUT_FOR_DELIVERY",
-              ],
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const partner = await tx.deliveryPartner.findUnique({
+          where: { id: partnerId },
+          include: {
+            user: {
+              select: {
+                status: true,
+                role: true,
+              },
             },
           },
-        },
-      },
-      data: {
-        isAvailable: parsed.data.isAvailable,
-      },
-    });
+        });
 
-    if (updatedCount.count !== 1) {
+        if (!partner) {
+          return {
+            error: {
+              status: 404,
+              code: "PARTNER_NOT_FOUND",
+              message: "Delivery partner not found.",
+            },
+          };
+        }
+
+        if (
+          partner.user.status !== "ACTIVE" ||
+          partner.user.role !== "DELIVERY_PARTNER"
+        ) {
+          return {
+            error: {
+              status: 409,
+              code: "PARTNER_INACTIVE",
+              message: "Delivery partner account is not active.",
+            },
+          };
+        }
+
+        const updatedCount = await tx.deliveryPartner.updateMany({
+          where: {
+            id: partnerId,
+            status: {
+              in: ["AVAILABLE", "DELIVERED"],
+            },
+            user: {
+              role: "DELIVERY_PARTNER",
+              status: "ACTIVE",
+            },
+            orders: {
+              none: {
+                orderStatus: {
+                  in: [
+                    "PLACED",
+                    "CONFIRMED",
+                    "PREPARING",
+                    "READY_FOR_PICKUP",
+                    "PICKED_UP",
+                    "OUT_FOR_DELIVERY",
+                  ],
+                },
+              },
+            },
+          },
+          data: {
+            status: "AVAILABLE",
+            isAvailable: parsed.data.isAvailable,
+          },
+        });
+
+        if (updatedCount.count !== 1) {
+          return {
+            error: {
+              status: 409,
+              code: "PARTNER_BUSY",
+              message:
+                "Partner has an active assignment or cannot change availability in the current state.",
+            },
+          };
+        }
+
+        const updated = await tx.deliveryPartner.findUnique({
+          where: { id: partnerId },
+          select: {
+            id: true,
+            userId: true,
+            isAvailable: true,
+            status: true,
+          },
+        });
+
+        return { partner: updated };
+      },
+      {
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
+        maxWait: 5000,
+        timeout: 15000,
+      }
+    );
+
+    if ("error" in result && result.error) {
       return sendError(
         res,
-        409,
-        "PARTNER_BUSY",
-        "Partner has an active assignment or is not in AVAILABLE status."
+        result.error.status,
+        result.error.code,
+        result.error.message
       );
     }
 
-    const updated = await prisma.deliveryPartner.findUnique({
-      where: { id: partnerId },
-      select: {
-        id: true,
-        userId: true,
-        isAvailable: true,
-        status: true,
-      },
-    });
-
     return res.json({
-      data: updated,
+      data: result.partner,
       message: "Delivery partner availability updated.",
     });
   } catch (error) {
     console.error("Update partner availability error:", error);
+
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2034"
+    ) {
+      return sendError(
+        res,
+        409,
+        "AVAILABILITY_CONFLICT",
+        "Concurrent update detected. Please retry."
+      );
+    }
 
     return sendError(
       res,
@@ -396,7 +441,7 @@ router.post("/:partnerId/assign", async (req, res) => {
           };
         }
 
-        // Reserve this partner atomically.
+        // Reserve the partner atomically.
         const reserved = await tx.deliveryPartner.updateMany({
           where: {
             id: partnerId,
@@ -435,7 +480,6 @@ router.post("/:partnerId/assign", async (req, res) => {
         });
 
         if (assigned.count !== 1) {
-          // Throwing rolls back the partner reservation.
           throw new Error("ORDER_ASSIGNMENT_CONFLICT");
         }
 
@@ -461,7 +505,8 @@ router.post("/:partnerId/assign", async (req, res) => {
         return { order: updatedOrder };
       },
       {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        isolationLevel:
+          Prisma.TransactionIsolationLevel.Serializable,
         maxWait: 5000,
         timeout: 15000,
       }
@@ -517,5 +562,4 @@ router.post("/:partnerId/assign", async (req, res) => {
 });
 
 export default router;
-
 
