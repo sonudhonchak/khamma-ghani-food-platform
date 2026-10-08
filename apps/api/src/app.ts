@@ -7,6 +7,7 @@ import adminRestaurantsRouter from "./routes/adminRestaurants.js";
 import restaurantMenuRouter from "./routes/restaurantMenu.js";
 import cartRouter from "./routes/cart.js";
 import addressesRouter from "./routes/addresses.js";
+import ordersRouter from "./routes/orders.js";
 import {
   requireAuth,
   type AuthenticatedRequest,
@@ -57,6 +58,9 @@ app.use("/api/v1/cart", cartRouter);
 // Customer delivery address routes
 app.use("/api/v1/addresses", addressesRouter);
 
+// Customer order and checkout routes
+app.use("/api/v1/orders", ordersRouter);
+
 // Health check
 app.get("/health", (_req, res) => {
   return res.json({
@@ -87,3 +91,4 @@ app.use((_req, res) => {
 });
 
 export default app;
+
