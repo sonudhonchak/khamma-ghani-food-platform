@@ -1,4 +1,5 @@
 
+
 import cors from "cors";
 import express from "express";
 import authRouter from "./routes/auth.js";
@@ -11,6 +12,7 @@ import ordersRouter from "./routes/orders.js";
 import restaurantOrdersRouter from "./routes/restaurantOrders.js";
 import adminDeliveryPartnersRouter from "./routes/adminDeliveryPartners.js";
 import deliveryOrdersRouter from "./routes/deliveryOrders.js";
+import deliveryCodRouter from "./routes/deliveryCod.js";
 import {
   requireAuth,
   type AuthenticatedRequest,
@@ -73,6 +75,9 @@ app.use("/api/v1/admin/delivery-partners", adminDeliveryPartnersRouter);
 // Delivery partner assigned-order routes
 app.use("/api/v1/delivery/orders", deliveryOrdersRouter);
 
+// Delivery partner COD cash collection routes
+app.use("/api/v1/delivery/orders", deliveryCodRouter);
+
 // Health check
 app.get("/health", (_req, res) => {
   return res.json({
@@ -103,5 +108,3 @@ app.use((_req, res) => {
 });
 
 export default app;
-
-
