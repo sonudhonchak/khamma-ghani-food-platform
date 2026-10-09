@@ -366,6 +366,7 @@ function Shell({ children }: { children: ReactNode }) {
                 {cart?.itemCount ?? 0}
               </span>
             </Link>
+            {session && <Link to="/orders" className="rounded-xl px-2 py-2 text-xs font-bold text-orange-700 hover:bg-orange-50 sm:text-sm">My orders</Link>}
 
             {session ? (
               <div className="flex items-center gap-2">
@@ -1691,12 +1692,231 @@ function CartPage() {
           <div className="flex justify-between py-2 text-slate-600"><span>Subtotal</span><span>{money(cart.subtotal)}</span></div>
           <div className="flex justify-between py-2 text-slate-600"><span>Delivery fee</span><span>{money(cart.deliveryFee)}</span></div>
           <div className="mt-3 flex justify-between border-t pt-4 text-xl font-black"><span>Total</span><span>{money(cart.total)}</span></div>
-          <p className="mt-4 text-sm text-slate-500">Checkout and payment will be enabled in the next development step.</p>
+          <Link to="/checkout" className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 py-3 font-bold text-white hover:bg-orange-700">Proceed to checkout <ArrowRight size={18}/></Link>
           <button disabled={!!busy} onClick={() => void clearCart()} className="mt-5 text-sm font-bold text-red-600 disabled:opacity-40">Clear cart</button>
         </section>
       </div>}
     </main>
   </Shell>;
+}
+
+type DeliveryAddress = {
+  id: string;
+  label: string;
+  name: string;
+  phone: string;
+  addressLine: string;
+  landmark: string | null;
+  city: string;
+  state: string;
+  pincode: string;
+  isDefault: boolean;
+};
+
+type OrderSummary = {
+  id: string;
+  orderNumber: string;
+  orderStatus: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  total: string | number;
+  subtotal?: string | number;
+  deliveryFee?: string | number;
+  createdAt: string;
+  addressLineSnapshot?: string;
+  addressCitySnapshot?: string;
+  addressStateSnapshot?: string;
+  addressPincodeSnapshot?: string;
+  restaurant?: { id: string; name: string };
+  items?: Array<{ id: string; nameSnapshot: string; quantity: number; priceSnapshot: string | number }>;
+  statusHistory?: Array<{ id: string; status: string; note?: string | null; createdAt: string }>;
+};
+
+async function customerRequest<T>(path: string, method = "GET", body?: object): Promise<T> {
+  const session = readSession();
+  if (!session) throw new Error("Please log in to continue.");
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/api/v1${path}`, {
+      method,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${session.token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    throw new Error("Cannot connect to the server. Please try again.");
+  }
+  const result = (await response.json().catch(() => ({}))) as ApiError & { data?: T };
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("Your session has expired. Please log in again.");
+    throw new Error(result.error?.message ?? `Request failed (${response.status}).`);
+  }
+  if (result.data === undefined) throw new Error("Unexpected server response.");
+  return result.data;
+}
+
+const emptyAddress = {
+  label: "Home", name: "", phone: "", addressLine: "", landmark: "",
+  city: "", state: "Rajasthan", pincode: "", isDefault: true,
+};
+
+function CheckoutPage() {
+  const session = useCustomerSession();
+  const navigate = useNavigate();
+  const { cart, loading: cartLoading, error: cartError, refresh } = useCartData();
+  const [addresses, setAddresses] = useState<DeliveryAddress[]>([]);
+  const [addressId, setAddressId] = useState("");
+  const [loadingAddresses, setLoadingAddresses] = useState(true);
+  const [addressError, setAddressError] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ ...emptyAddress });
+  const [saving, setSaving] = useState(false);
+  const [placing, setPlacing] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    if (!session) { setLoadingAddresses(false); return; }
+    let active = true;
+    setLoadingAddresses(true);
+    setAddressError("");
+    void customerRequest<DeliveryAddress[]>("/addresses")
+      .then((list) => {
+        if (!active) return;
+        setAddresses(list);
+        setAddressId((previous) =>
+          list.some((a) => a.id === previous) ? previous : (list.find((a) => a.isDefault)?.id ?? list[0]?.id ?? "")
+        );
+      })
+      .catch((error: unknown) => { if (active) setAddressError(error instanceof Error ? error.message : "Unable to load addresses."); })
+      .finally(() => { if (active) setLoadingAddresses(false); });
+    return () => { active = false; };
+  }, [session?.token, reload]);
+
+  async function saveAddress(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setActionError("");
+    try {
+      const address = await customerRequest<DeliveryAddress>("/addresses", "POST", {
+        ...form, name: form.name.trim(), label: form.label.trim(),
+        phone: form.phone.trim(), addressLine: form.addressLine.trim(),
+        landmark: form.landmark.trim(), city: form.city.trim(),
+        state: form.state.trim(), pincode: form.pincode.trim(),
+      });
+      setAddresses((previous) => [address, ...previous.map((item) => ({ ...item, isDefault: address.isDefault ? false : item.isDefault }))]);
+      setAddressId(address.id);
+      setForm({ ...emptyAddress });
+      setShowForm(false);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to save address.");
+    } finally { setSaving(false); }
+  }
+
+  async function placeOrder() {
+    if (placing || !addressId || !cart?.items?.length) return;
+    if (!window.confirm("Place this Cash on Delivery order? A real order will be created.")) return;
+    setPlacing(true);
+    setActionError("");
+    try {
+      // Recheck the cart immediately before submission; the server revalidates it again.
+      const latestCart = await cartRequest("");
+      if (!latestCart?.items?.length) throw new Error("Your cart is empty. Please add items first.");
+      const result = await customerRequest<{ order: OrderSummary; message: string }>("/orders", "POST", {
+        addressId, paymentMethod: "COD", ...(notes.trim() ? { notes: notes.trim() } : {}),
+      });
+      if (!result.order?.id) throw new Error("Order created, but confirmation details were missing. Check My Orders before trying again.");
+      notifyCartChanged();
+      navigate(`/orders/${encodeURIComponent(result.order.id)}`, { replace: true });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Unable to place order. Please check My Orders before retrying.");
+      refresh();
+    } finally { setPlacing(false); }
+  }
+
+  return <Shell><main className="mx-auto max-w-5xl px-4 py-10 sm:px-6">
+    <Link to="/cart" className="text-sm font-bold text-orange-600">← Back to cart</Link>
+    <h1 className="mt-4 text-3xl font-black">Checkout</h1>
+    <p className="mt-2 text-sm text-slate-500">Secure checkout · Cash on Delivery</p>
+    {!session ? <div className="mt-8 rounded-3xl bg-white p-8"><p>Please log in to check out.</p><Link to="/login" className="mt-4 inline-flex rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Login</Link></div>
+    : <div className="mt-7 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
+      <div className="space-y-6">
+        <section className="rounded-3xl border border-orange-100 bg-white p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-black">Delivery address</h2><button type="button" onClick={() => setShowForm((v) => !v)} className="rounded-xl bg-orange-50 px-4 py-2 text-sm font-bold text-orange-700">{showForm ? "Cancel" : "+ Add address"}</button></div>
+          {loadingAddresses ? <p className="mt-4 text-sm">Loading addresses...</p> : addressError ? <div role="alert" className="mt-4 text-sm text-red-700">{addressError} <button onClick={() => setReload((n) => n + 1)} className="font-bold underline">Retry</button></div> : !addresses.length && !showForm ? <p className="mt-4 text-sm text-slate-600">Add a delivery address to continue.</p> : null}
+          <div className="mt-4 space-y-3">{addresses.map((address) => <label key={address.id} className={`flex cursor-pointer gap-3 rounded-2xl border p-4 ${addressId === address.id ? "border-orange-500 bg-orange-50" : "border-orange-100"}`}>
+            <input type="radio" name="checkout-address" checked={addressId === address.id} onChange={() => setAddressId(address.id)} className="accent-orange-600" />
+            <span className="min-w-0 text-sm"><span className="font-black">{address.label}</span>{address.isDefault && <span className="ml-2 text-xs font-semibold text-orange-700">Default</span>}<span className="mt-1 block">{address.name} · {address.phone}</span><span className="mt-1 block text-slate-500">{address.addressLine}{address.landmark ? `, ${address.landmark}` : ""}, {address.city}, {address.state} - {address.pincode}</span></span>
+          </label>)}</div>
+          {showForm && <form onSubmit={(event) => void saveAddress(event)} className="mt-5 grid gap-3 sm:grid-cols-2">
+            {([ ["label", "Label (Home/Work)"], ["name", "Recipient name"], ["phone", "10-digit mobile number"], ["addressLine", "House number, street and area"], ["landmark", "Landmark (optional)"], ["city", "City"], ["state", "State"], ["pincode", "6-digit PIN code"] ] as const).map(([key, label]) => <label key={key} className={key === "addressLine" ? "sm:col-span-2" : ""}><span className="mb-1 block text-xs font-bold">{label}</span><input className="w-full rounded-xl border border-orange-200 px-3 py-3 text-sm outline-none focus:border-orange-500" value={form[key]} onChange={(event) => setForm((prev) => ({ ...prev, [key]: event.target.value }))} required={key !== "landmark"} minLength={key === "addressLine" ? 5 : key === "name" || key === "city" || key === "state" ? 2 : undefined} maxLength={key === "addressLine" ? 300 : key === "landmark" ? 150 : key === "label" ? 50 : 100} pattern={key === "phone" ? "[6-9][0-9]{9}" : key === "pincode" ? "[1-9][0-9]{5}" : undefined} inputMode={key === "phone" || key === "pincode" ? "numeric" : undefined} /></label>)}
+            <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={form.isDefault} onChange={(event) => setForm((prev) => ({ ...prev, isDefault: event.target.checked }))}/> Make default address</label>
+            <button disabled={saving} type="submit" className="rounded-xl bg-slate-900 px-5 py-3 font-bold text-white disabled:opacity-50 sm:col-span-2">{saving ? "Saving..." : "Save address"}</button>
+          </form>}
+        </section>
+        <section className="rounded-3xl border border-orange-100 bg-white p-6"><h2 className="text-xl font-black">Payment method</h2><div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm font-bold text-green-800">✓ Cash on Delivery (COD)</div><p className="mt-3 text-xs text-slate-500">Online payments are not available yet.</p></section>
+        <section className="rounded-3xl border border-orange-100 bg-white p-6"><label htmlFor="checkout-notes" className="font-black">Delivery instructions (optional)</label><textarea id="checkout-notes" maxLength={500} rows={3} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="For example: Call before delivery" className="mt-3 w-full rounded-xl border border-orange-200 p-3 text-sm outline-none focus:border-orange-500"/></section>
+      </div>
+      <section className="h-fit rounded-3xl border border-orange-100 bg-white p-6 lg:sticky lg:top-24"><h2 className="text-xl font-black">Order review</h2>
+        {cartLoading ? <p className="mt-4 text-sm">Loading cart...</p> : cartError ? <p role="alert" className="mt-4 text-sm text-red-700">{cartError}</p> : !cart?.items?.length ? <div className="mt-4 text-sm">Your cart is empty. <Link to="/restaurants" className="font-bold text-orange-600">Browse restaurants</Link></div> : <>
+          <div className="mt-4 space-y-3 border-b pb-4">{cart.items.map((item) => <div key={item.id} className="flex justify-between gap-3 text-sm"><span>{item.foodItem?.name ?? item.food?.name ?? "Food item"} × {item.quantity}</span><span className="font-semibold">{item.totalPrice !== undefined ? money(item.totalPrice) : "—"}</span></div>)}</div>
+          <div className="mt-4 flex justify-between text-sm"><span>Subtotal</span><span>{money(cart.subtotal)}</span></div><div className="mt-3 flex justify-between text-sm"><span>Delivery fee</span><span>{money(cart.deliveryFee)}</span></div><div className="mt-4 flex justify-between border-t pt-4 text-lg font-black"><span>Estimated total</span><span>{money(cart.total)}</span></div>
+          <p className="mt-3 text-xs text-slate-500">Final total and restaurant minimum are validated by the server when you place the order.</p>
+        </>}
+        {actionError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{actionError}</p>}
+        <button type="button" onClick={() => void placeOrder()} disabled={placing || saving || cartLoading || !!cartError || loadingAddresses || !!addressError || !addressId || !cart?.items?.length} className="mt-5 w-full rounded-xl bg-orange-600 px-5 py-3.5 font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50">{placing ? "Placing order..." : "Place order · Cash on Delivery"}</button>
+        <Link to="/orders" className="mt-4 block text-center text-sm font-bold text-orange-600">View my orders</Link>
+      </section>
+    </div>}
+  </main></Shell>;
+}
+
+function OrdersPage() {
+  const session = useCustomerSession();
+  const [orders, setOrders] = useState<OrderSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!session) { setLoading(false); return; }
+    let active = true;
+    setLoading(true);
+    setError("");
+    void customerRequest<OrderSummary[]>("/orders").then((list) => { if (active) setOrders(list); }).catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : "Unable to load orders."); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, retry]);
+  return <Shell><main className="mx-auto max-w-4xl px-4 py-10 sm:px-6"><h1 className="text-3xl font-black">My orders</h1>
+    {!session ? <p className="mt-6">Please <Link to="/login" className="font-bold text-orange-600">log in</Link> to see your orders.</p> : loading ? <p className="mt-6">Loading orders...</p> : error ? <p role="alert" className="mt-6 text-red-700">{error} <button onClick={() => setRetry((n) => n + 1)} className="font-bold underline">Retry</button></p> : !orders.length ? <div className="mt-6 rounded-3xl bg-white p-8"><p>No orders yet.</p><Link to="/restaurants" className="mt-4 inline-block font-bold text-orange-600">Explore restaurants</Link></div> : <div className="mt-6 space-y-4">{orders.map((order) => <Link to={`/orders/${encodeURIComponent(order.id)}`} key={order.id} className="block rounded-2xl border border-orange-100 bg-white p-5 hover:border-orange-400"><div className="flex flex-wrap items-center justify-between gap-3"><span className="font-black">{order.orderNumber}</span><span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700">{order.orderStatus}</span></div><p className="mt-2 text-sm text-slate-500">{order.restaurant?.name ?? "Restaurant"} · {new Date(order.createdAt).toLocaleString("en-IN")}</p><p className="mt-3 font-black">{money(order.total)}</p></Link>)}</div>}
+  </main></Shell>;
+}
+
+function OrderDetailsPage() {
+  const { orderId } = useParams<{ orderId: string }>();
+  const session = useCustomerSession();
+  const [order, setOrder] = useState<OrderSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!session || !orderId) { setLoading(false); return; }
+    let active = true;
+    setLoading(true);
+    setError("");
+    void customerRequest<OrderSummary>(`/orders/${encodeURIComponent(orderId)}`).then((data) => { if (active) setOrder(data); }).catch((err: unknown) => { if (active) setError(err instanceof Error ? err.message : "Unable to load order."); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, orderId, retry]);
+  return <Shell><main className="mx-auto max-w-4xl px-4 py-10 sm:px-6"><Link to="/orders" className="text-sm font-bold text-orange-600">← My orders</Link><h1 className="mt-4 text-3xl font-black">Order details</h1>
+    {!session ? <p className="mt-6">Please <Link to="/login" className="font-bold text-orange-600">log in</Link> to view this order.</p> : loading ? <p className="mt-6">Loading order...</p> : error ? <p role="alert" className="mt-6 text-red-700">{error} <button onClick={() => setRetry((n) => n + 1)} className="font-bold underline">Retry</button></p> : order ? <div className="mt-6 space-y-5">
+      <section className="rounded-3xl border border-green-100 bg-white p-6"><p className="text-xs font-bold uppercase tracking-widest text-green-700">Order recorded</p><h2 className="mt-2 text-2xl font-black">{order.orderNumber}</h2><p className="mt-2 text-sm text-slate-500">{new Date(order.createdAt).toLocaleString("en-IN")}</p><p className="mt-3 font-bold">Status: {order.orderStatus}</p><p className="mt-1 text-sm">Payment: {order.paymentMethod} · {order.paymentStatus}</p><p className="mt-3 text-2xl font-black text-orange-600">{money(order.total)}</p></section>
+      <section className="rounded-3xl border border-orange-100 bg-white p-6"><h3 className="text-xl font-black">Items</h3><div className="mt-4 space-y-3">{order.items?.map((item) => <div key={item.id} className="flex justify-between gap-4 text-sm"><span>{item.nameSnapshot} × {item.quantity}</span><span className="font-bold">{money(Number(item.priceSnapshot) * item.quantity)}</span></div>)}</div>{order.addressLineSnapshot && <p className="mt-5 border-t pt-4 text-sm text-slate-600">Deliver to: {order.addressLineSnapshot}, {order.addressCitySnapshot}, {order.addressStateSnapshot} - {order.addressPincodeSnapshot}</p>}</section>
+      <section className="rounded-3xl border border-orange-100 bg-white p-6"><h3 className="text-xl font-black">Status history</h3><div className="mt-4 space-y-3">{order.statusHistory?.map((event) => <div key={event.id} className="border-l-2 border-orange-400 pl-4"><p className="font-bold">{event.status}</p><p className="text-xs text-slate-500">{new Date(event.createdAt).toLocaleString("en-IN")}</p>{event.note && <p className="mt-1 text-sm text-slate-600">{event.note}</p>}</div>)}</div></section>
+    </div> : null}
+  </main></Shell>;
 }
 
 function SimplePage({
@@ -1756,6 +1976,9 @@ export default function App() {
       />
 
       <Route path="/cart" element={<CartPage />} />
+      <Route path="/checkout" element={<CheckoutPage />} />
+      <Route path="/orders" element={<OrdersPage />} />
+      <Route path="/orders/:orderId" element={<OrderDetailsPage />} />
 
       <Route
         path="/login"
