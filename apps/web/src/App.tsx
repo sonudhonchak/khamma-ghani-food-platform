@@ -18,6 +18,9 @@ import {
   Search,
   ShieldCheck,
   ShoppingBag,
+  Minus,
+  Plus,
+  Trash2,
   Store,
   UserRound,
   Utensils,
@@ -132,6 +135,92 @@ type RestaurantMenu = {
   categories: MenuCategory[];
 };
 
+type CartFood = { id?: string; name?: string; image?: string | null; price?: string | number };
+type CartItem = {
+  id: string;
+  foodItemId: string;
+  quantity: number;
+  unitPrice?: string | number;
+  totalPrice?: string | number;
+  foodItem?: CartFood;
+  food?: CartFood;
+};
+type CartData = {
+  items: CartItem[];
+  itemCount: number;
+  subtotal: string | number;
+  deliveryFee: string | number;
+  total: string | number;
+};
+type CartResponse = ApiError & { data?: CartData };
+
+const CART_CHANGE_EVENT = "khamma-cart-change";
+function money(value: string | number | undefined) {
+  const amount = Number(value ?? 0);
+  return `₹${Number.isFinite(amount) ? amount.toFixed(2) : "0.00"}`;
+}
+
+async function cartRequest(path: string, method = "GET", body?: object): Promise<CartData | null> {
+  const session = readSession();
+  if (!session) throw new Error("Please log in to use your cart.");
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/api/v1/cart${path}`, {
+      method,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${session.token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    throw new Error("Cannot connect to the cart service. Please try again.");
+  }
+  const result = (await response.json().catch(() => ({}))) as CartResponse;
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("Your session has expired. Please log in again.");
+    if (response.status === 409) throw new Error(result.error?.message ?? "Your cart contains food from another restaurant. Clear it before adding food from this restaurant.");
+    throw new Error(result.error?.message ?? `Cart request failed (${response.status}).`);
+  }
+  return result.data ?? null;
+}
+
+function notifyCartChanged() {
+  window.dispatchEvent(new Event(CART_CHANGE_EVENT));
+}
+
+function useCartData() {
+  const session = useCustomerSession();
+  const [cart, setCart] = useState<CartData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const refresh = () => setVersion((value) => value + 1);
+    window.addEventListener(CART_CHANGE_EVENT, refresh);
+    return () => window.removeEventListener(CART_CHANGE_EVENT, refresh);
+  }, []);
+  useEffect(() => {
+    let active = true;
+    if (!session) {
+      setCart(null);
+      setError("");
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError("");
+    void cartRequest("").then((data) => {
+      if (active) setCart(data);
+    }).catch((err: unknown) => {
+      if (active) setError(err instanceof Error ? err.message : "Unable to load cart.");
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, version]);
+  return { cart, loading, error, refresh: notifyCartChanged };
+}
+
 const categories = [
   { label: "Biryani", icon: "🍛" },
   { label: "Pizza", icon: "🍕" },
@@ -219,6 +308,7 @@ function Shell({ children }: { children: ReactNode }) {
   const session = useCustomerSession();
   const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
+  const { cart } = useCartData();
 
   async function handleLogout() {
     if (loggingOut) return;
@@ -273,7 +363,7 @@ function Shell({ children }: { children: ReactNode }) {
             >
               <ShoppingBag size={20} />
               <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-orange-600 px-1 text-[9px] font-bold text-white">
-                0
+                {cart?.itemCount ?? 0}
               </span>
             </Link>
 
@@ -843,6 +933,34 @@ function RestaurantsPage({
 }
 
 function FoodCard({ food }: { food: FoodItem }) {
+  const navigate = useNavigate();
+  const [adding, setAdding] = useState(false);
+  const [cartMessage, setCartMessage] = useState("");
+  const [cartError, setCartError] = useState("");
+  const hasOptions = (food.options?.length ?? 0) > 0;
+  async function handleAdd() {
+    if (adding) return;
+    if (!readSession()) {
+      navigate("/login");
+      return;
+    }
+    if (hasOptions) {
+      setCartError("Customisable dishes aren't supported in the cart yet. Please choose an item without options.");
+      return;
+    }
+    setAdding(true);
+    setCartError("");
+    setCartMessage("");
+    try {
+      await cartRequest("/items", "POST", { foodItemId: food.id, quantity: 1 });
+      notifyCartChanged();
+      setCartMessage("Added to cart!");
+    } catch (err) {
+      setCartError(err instanceof Error ? err.message : "Unable to add item.");
+    } finally {
+      setAdding(false);
+    }
+  }
   const originalPrice = Number(food.price);
   const salePrice =
     food.discountedPrice === null
@@ -912,9 +1030,13 @@ function FoodCard({ food }: { food: FoodItem }) {
           </p>
         )}
 
-        <p className="mt-3 text-xs text-slate-400">
-          Ordering will be enabled after cart integration.
-        </p>
+        <button type="button" onClick={() => void handleAdd()}
+          disabled={adding || !food.availability || hasOptions}
+          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50">
+          <Plus size={16} /> {adding ? "Adding..." : hasOptions ? "Customisation coming soon" : !food.availability ? "Unavailable" : "Add to cart"}
+        </button>
+        {cartMessage && <p role="status" className="mt-2 text-xs font-semibold text-green-700">{cartMessage}</p>}
+        {cartError && <p role="alert" className="mt-2 text-xs font-semibold text-red-700">{cartError}</p>}
       </div>
 
       <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-orange-50 sm:h-36 sm:w-36">
@@ -1506,6 +1628,77 @@ function AuthPage() {
   );
 }
 
+function CartPage() {
+  const session = useCustomerSession();
+  const { cart, loading, error, refresh } = useCartData();
+  const [busy, setBusy] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
+  async function changeItem(item: CartItem, quantity: number) {
+    if (busy) return;
+    setBusy(item.id);
+    setActionError("");
+    try {
+      if (quantity <= 0) await cartRequest(`/items/${encodeURIComponent(item.id)}`, "DELETE");
+      else await cartRequest(`/items/${encodeURIComponent(item.id)}`, "PATCH", { quantity });
+      refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Unable to update item.");
+    } finally { setBusy(null); }
+  }
+  async function clearCart() {
+    if (busy || !window.confirm("Remove all items from your cart?")) return;
+    setBusy("all");
+    setActionError("");
+    try { await cartRequest("", "DELETE"); refresh(); }
+    catch (err) { setActionError(err instanceof Error ? err.message : "Unable to clear cart."); }
+    finally { setBusy(null); }
+  }
+  return <Shell>
+    <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6">
+      <h1 className="text-3xl font-black">Your cart</h1>
+      <p className="mt-2 text-sm text-slate-500">Prices and totals are calculated by our server.</p>
+      {!session ? <div className="mt-8 rounded-3xl bg-white p-8 text-center shadow-sm">
+        <p className="mb-5 text-slate-600">Please log in to view your cart.</p>
+        <Link to="/login" className="rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Login</Link>
+      </div> : loading ? <p className="mt-8" aria-busy="true">Loading your cart...</p>
+      : error ? <div role="alert" className="mt-8 rounded-2xl bg-red-50 p-5 text-red-700">{error}<button onClick={refresh} className="ml-4 font-bold underline">Retry</button></div>
+      : !cart || !cart.items?.length ? <div className="mt-8 rounded-3xl bg-white p-10 text-center shadow-sm">
+        <ShoppingBag className="mx-auto text-orange-500" size={40}/>
+        <p className="mt-4 font-bold">Your cart is empty</p>
+        <Link to="/restaurants" className="mt-5 inline-flex rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Explore restaurants</Link>
+      </div> : <div className="mt-7 space-y-5">
+        {actionError && <p role="alert" className="rounded-xl bg-red-50 p-4 text-red-700">{actionError}</p>}
+        <div className="space-y-3">
+          {cart.items.map(item => {
+            const food = item.foodItem ?? item.food;
+            return <article key={item.id} className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-orange-100 bg-white p-5">
+              <div className="min-w-0 flex-1">
+                <h2 className="font-bold">{food?.name ?? "Food item"}</h2>
+                {item.unitPrice !== undefined && <p className="mt-1 text-sm text-slate-500">{money(item.unitPrice)} each</p>}
+                {item.totalPrice !== undefined && <p className="mt-1 font-black text-orange-600">{money(item.totalPrice)}</p>}
+              </div>
+              <div className="flex items-center gap-2">
+                <button aria-label="Decrease quantity" disabled={!!busy} onClick={() => void changeItem(item, item.quantity - 1)} className="rounded-lg border p-2 disabled:opacity-40"><Minus size={17}/></button>
+                <span className="min-w-6 text-center font-bold">{item.quantity}</span>
+                <button aria-label="Increase quantity" disabled={!!busy || item.quantity >= 99} onClick={() => void changeItem(item, item.quantity + 1)} className="rounded-lg border p-2 disabled:opacity-40"><Plus size={17}/></button>
+                <button aria-label="Remove item" disabled={!!busy} onClick={() => void changeItem(item, 0)} className="ml-2 rounded-lg p-2 text-red-600 disabled:opacity-40"><Trash2 size={18}/></button>
+              </div>
+            </article>;
+          })}
+        </div>
+        <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-xl font-black">Order summary</h2>
+          <div className="flex justify-between py-2 text-slate-600"><span>Subtotal</span><span>{money(cart.subtotal)}</span></div>
+          <div className="flex justify-between py-2 text-slate-600"><span>Delivery fee</span><span>{money(cart.deliveryFee)}</span></div>
+          <div className="mt-3 flex justify-between border-t pt-4 text-xl font-black"><span>Total</span><span>{money(cart.total)}</span></div>
+          <p className="mt-4 text-sm text-slate-500">Checkout and payment will be enabled in the next development step.</p>
+          <button disabled={!!busy} onClick={() => void clearCart()} className="mt-5 text-sm font-bold text-red-600 disabled:opacity-40">Clear cart</button>
+        </section>
+      </div>}
+    </main>
+  </Shell>;
+}
+
 function SimplePage({
   title,
   text,
@@ -1562,15 +1755,7 @@ export default function App() {
         element={<RestaurantsPage searchMode />}
       />
 
-      <Route
-        path="/cart"
-        element={
-          <SimplePage
-            title="Cart foundation"
-            text="The cart will be connected to server-validated prices, quantities, add-ons, coupons and totals."
-          />
-        }
-      />
+      <Route path="/cart" element={<CartPage />} />
 
       <Route
         path="/login"
