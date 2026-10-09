@@ -1,6 +1,13 @@
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, Route, Routes, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  Route,
+  Routes,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import {
   ArrowRight,
   Bike,
@@ -37,14 +44,59 @@ type Restaurant = {
   isBusy: boolean;
 };
 
-type RestaurantResponse = {
-  data: Restaurant[];
-  pagination?: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
+type FoodImage = {
+  id: string;
+  url: string;
+  altText: string | null;
+  sortOrder: number;
+  isPrimary: boolean;
+};
+
+type FoodChoice = {
+  id: string;
+  name: string;
+  price: string;
+};
+
+type FoodOption = {
+  id: string;
+  name: string;
+  isRequired: boolean;
+  minSelect: number;
+  maxSelect: number;
+  choices: FoodChoice[];
+};
+
+type FoodItem = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  price: string;
+  discountedPrice: string | null;
+  image: string | null;
+  foodType: "VEG" | "NON_VEG" | "EGG";
+  availability: boolean;
+  preparationTime: number;
+  rating: string;
+  images: FoodImage[];
+  options: FoodOption[];
+};
+
+type MenuCategory = {
+  id: string;
+  name: string;
+  image: string | null;
+  sortOrder: number;
+  foods: FoodItem[];
+};
+
+type RestaurantMenu = {
+  id: string;
+  name: string;
+  slug: string;
+  status: string;
+  categories: MenuCategory[];
 };
 
 const categories = [
@@ -75,10 +127,10 @@ function Shell({ children }: { children: React.ReactNode }) {
             className="hidden items-center gap-2 rounded-xl px-3 py-2 text-left hover:bg-orange-50 sm:flex"
           >
             <MapPin size={17} className="text-orange-600" />
-            <span className="max-w-40 truncate text-sm font-semibold">
+            <span className="text-sm font-semibold">
               Explore restaurants
             </span>
-            <ChevronRight size={15} className="text-slate-400" />
+            <ChevronRight size={15} />
           </Link>
 
           <div className="ml-auto flex items-center gap-2">
@@ -120,8 +172,8 @@ function Shell({ children }: { children: React.ReactNode }) {
               Khamma Ghani
             </div>
             <p className="mt-2 text-sm leading-6 text-slate-500">
-              A modern local food-delivery platform built for real customers
-              and real restaurants.
+              A modern local food-delivery platform built for
+              real customers and real restaurants.
             </p>
           </div>
 
@@ -172,22 +224,20 @@ function useRestaurants() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
 
-    async function loadRestaurants() {
-      try {
-        setLoading(true);
-        setError(null);
+    async function load() {
+      setLoading(true);
+      setError(null);
 
+      try {
         const response = await fetch(
           `${API_BASE}/api/v1/restaurants`,
           {
-            method: "GET",
-            headers: {
-              Accept: "application/json",
-            },
+            headers: { Accept: "application/json" },
             signal: controller.signal,
           }
         );
@@ -198,25 +248,28 @@ function useRestaurants() {
           );
         }
 
-        const result: RestaurantResponse = await response.json();
+        const result: { data: Restaurant[] } =
+          await response.json();
 
         if (!Array.isArray(result.data)) {
           throw new Error("Unexpected restaurant response.");
         }
 
-        setRestaurants(
-          result.data.filter(
-            (restaurant) => restaurant.status === "ACTIVE"
-          )
-        );
+        if (!controller.signal.aborted) {
+          setRestaurants(
+            result.data.filter(
+              (restaurant) => restaurant.status === "ACTIVE"
+            )
+          );
+        }
       } catch (err) {
-        if (controller.signal.aborted) return;
-
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load restaurants."
-        );
+        if (!controller.signal.aborted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Unable to load restaurants."
+          );
+        }
       } finally {
         if (!controller.signal.aborted) {
           setLoading(false);
@@ -224,12 +277,17 @@ function useRestaurants() {
       }
     }
 
-    void loadRestaurants();
+    void load();
 
     return () => controller.abort();
-  }, []);
+  }, [retry]);
 
-  return { restaurants, loading, error };
+  return {
+    restaurants,
+    loading,
+    error,
+    retry: () => setRetry((value) => value + 1),
+  };
 }
 
 function RestaurantCard({
@@ -242,28 +300,36 @@ function RestaurantCard({
 
   return (
     <article className="overflow-hidden rounded-3xl border border-orange-100 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
-      <div className="relative h-40 overflow-hidden bg-gradient-to-br from-orange-100 via-amber-50 to-orange-200">
-        {restaurant.coverImage ? (
-          <img
-            src={restaurant.coverImage}
-            alt={restaurant.name}
-            className="h-full w-full object-cover"
-            loading="lazy"
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            <Utensils size={52} className="text-orange-400" />
-          </div>
-        )}
+      <Link
+        to={`/restaurants/${restaurant.id}`}
+        className="block"
+      >
+        <div className="relative h-40 overflow-hidden bg-gradient-to-br from-orange-100 via-amber-50 to-orange-200">
+          {restaurant.coverImage ? (
+            <img
+              src={restaurant.coverImage}
+              alt={restaurant.name}
+              className="h-full w-full object-cover"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <Utensils
+                size={52}
+                className="text-orange-400"
+              />
+            </div>
+          )}
 
-        <span className="absolute bottom-3 left-3 rounded-xl bg-white/95 px-3 py-2 text-xs font-bold">
-          {restaurant.city}
-        </span>
+          <span className="absolute bottom-3 left-3 rounded-xl bg-white/95 px-3 py-2 text-xs font-bold">
+            {restaurant.city}
+          </span>
 
-        <span className="absolute bottom-3 right-3 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white">
-          {restaurant.deliveryTime} min
-        </span>
-      </div>
+          <span className="absolute bottom-3 right-3 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white">
+            {restaurant.deliveryTime} min
+          </span>
+        </div>
+      </Link>
 
       <div className="p-5">
         <div className="flex items-start justify-between gap-3">
@@ -296,17 +362,22 @@ function RestaurantCard({
         </p>
 
         <div className="mt-4 flex flex-wrap gap-3 border-t border-orange-100 pt-4 text-xs font-semibold text-slate-600">
-          <span>
-            Delivery ₹{restaurant.deliveryFee}
-          </span>
-          <span>
-            Min. order ₹{restaurant.minimumOrder}
-          </span>
+          <span>Delivery ₹{restaurant.deliveryFee}</span>
+          <span>Min. order ₹{restaurant.minimumOrder}</span>
         </div>
 
         <p className="mt-3 text-xs text-slate-500">
-          Hours: {restaurant.openingTime}–{restaurant.closingTime}
+          Hours: {restaurant.openingTime}–
+          {restaurant.closingTime}
         </p>
+
+        <Link
+          to={`/restaurants/${restaurant.id}`}
+          className="mt-4 inline-flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-orange-700"
+        >
+          View menu
+          <ArrowRight size={16} />
+        </Link>
       </div>
     </article>
   );
@@ -316,10 +387,12 @@ function RestaurantResults({
   restaurants,
   loading,
   error,
+  retry,
 }: {
   restaurants: Restaurant[];
   loading: boolean;
   error: string | null;
+  retry: () => void;
 }) {
   if (loading) {
     return (
@@ -350,7 +423,7 @@ function RestaurantResults({
           {error}
         </p>
         <button
-          onClick={() => window.location.reload()}
+          onClick={retry}
           className="mt-4 rounded-xl bg-slate-900 px-5 py-2 text-sm font-bold text-white"
         >
           Try again
@@ -389,8 +462,15 @@ function RestaurantResults({
 }
 
 function Home() {
-  const { restaurants, loading, error } = useRestaurants();
+  const {
+    restaurants,
+    loading,
+    error,
+    retry,
+  } = useRestaurants();
+
   const [search, setSearch] = useState("");
+  const navigate = useNavigate();
 
   return (
     <Shell>
@@ -408,22 +488,25 @@ function Home() {
               </h1>
 
               <p className="mt-5 max-w-xl text-base leading-7 text-orange-50 sm:text-lg">
-                Discover trusted restaurants, order your favourites
-                and follow every step of your delivery.
+                Discover trusted restaurants, order your
+                favourites and follow every step of your
+                delivery.
               </p>
 
               <form
                 className="mt-7 flex max-w-xl items-center gap-2 rounded-2xl bg-white p-2 shadow-xl"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  window.location.href =
-                    `/search?q=${encodeURIComponent(search)}`;
+                  navigate(
+                    `/search?q=${encodeURIComponent(search)}`
+                  );
                 }}
               >
                 <Search
                   className="ml-2 shrink-0 text-slate-400"
                   size={21}
                 />
+
                 <input
                   value={search}
                   onChange={(event) =>
@@ -433,6 +516,7 @@ function Home() {
                   placeholder="Search restaurants or cuisines..."
                   aria-label="Search restaurants"
                 />
+
                 <button
                   type="submit"
                   className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white"
@@ -454,11 +538,13 @@ function Home() {
                 What are you craving?
               </h2>
             </div>
+
             <Link
               to="/search"
               className="hidden items-center gap-1 text-sm font-bold text-orange-600 sm:flex"
             >
-              View all <ArrowRight size={16} />
+              View all
+              <ArrowRight size={16} />
             </Link>
           </div>
 
@@ -466,8 +552,10 @@ function Home() {
             {categories.map((category) => (
               <Link
                 key={category.label}
-                to={`/search?q=${encodeURIComponent(category.label)}`}
-                className="group rounded-2xl border border-orange-100 bg-white p-4 text-center shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                to={`/search?q=${encodeURIComponent(
+                  category.label
+                )}`}
+                className="rounded-2xl border border-orange-100 bg-white p-4 text-center shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
               >
                 <div className="text-3xl">
                   {category.icon}
@@ -490,11 +578,13 @@ function Home() {
                 Popular restaurants
               </h2>
             </div>
+
             <Link
               to="/restaurants"
               className="hidden items-center gap-1 text-sm font-bold text-orange-600 sm:flex"
             >
-              See all <ArrowRight size={16} />
+              See all
+              <ArrowRight size={16} />
             </Link>
           </div>
 
@@ -503,6 +593,7 @@ function Home() {
               restaurants={restaurants}
               loading={loading}
               error={error}
+              retry={retry}
             />
           </div>
         </section>
@@ -516,7 +607,13 @@ function RestaurantsPage({
 }: {
   searchMode?: boolean;
 }) {
-  const { restaurants, loading, error } = useRestaurants();
+  const {
+    restaurants,
+    loading,
+    error,
+    retry,
+  } = useRestaurants();
+
   const [params, setParams] = useSearchParams();
   const query = params.get("q") ?? "";
 
@@ -531,7 +628,9 @@ function RestaurantsPage({
         restaurant.cuisine,
         restaurant.city,
         restaurant.description ?? "",
-      ].some((value) => value.toLowerCase().includes(term))
+      ].some((value) =>
+        value.toLowerCase().includes(term)
+      )
     );
   }, [restaurants, query]);
 
@@ -543,19 +642,27 @@ function RestaurantsPage({
         </p>
 
         <h1 className="mt-2 text-3xl font-black sm:text-4xl">
-          {searchMode ? "Search restaurants" : "Explore restaurants"}
+          {searchMode
+            ? "Search restaurants"
+            : "Explore restaurants"}
         </h1>
 
         <p className="mt-3 text-sm text-slate-500">
-          Discover restaurants and cuisines available on our platform.
+          Discover restaurants and cuisines available on
+          our platform.
         </p>
 
         <div className="mt-7 flex items-center gap-3 rounded-2xl border border-orange-100 bg-white px-4 py-3">
-          <Search size={20} className="text-orange-500" />
+          <Search
+            size={20}
+            className="text-orange-500"
+          />
+
           <input
             value={query}
             onChange={(event) => {
               const value = event.target.value;
+
               setParams(
                 value ? { q: value } : {},
                 { replace: true }
@@ -579,8 +686,296 @@ function RestaurantsPage({
             restaurants={filtered}
             loading={loading}
             error={error}
+            retry={retry}
           />
         </div>
+      </main>
+    </Shell>
+  );
+}
+
+function FoodCard({ food }: { food: FoodItem }) {
+  const originalPrice = Number(food.price);
+  const salePrice =
+    food.discountedPrice === null
+      ? originalPrice
+      : Number(food.discountedPrice);
+
+  const discounted = salePrice < originalPrice;
+
+  const image =
+    food.image ||
+    food.images?.find((item) => item.isPrimary)?.url ||
+    food.images?.[0]?.url ||
+    null;
+
+  const foodLabel =
+    food.foodType === "VEG"
+      ? "Veg"
+      : food.foodType === "EGG"
+        ? "Egg"
+        : "Non-veg";
+
+  return (
+    <article className="flex gap-4 rounded-3xl border border-orange-100 bg-white p-5 shadow-sm">
+      <div className="min-w-0 flex-1">
+        <span
+          className={`inline-block rounded-lg px-2 py-1 text-xs font-bold ${
+            food.foodType === "VEG"
+              ? "bg-green-100 text-green-700"
+              : food.foodType === "EGG"
+                ? "bg-yellow-100 text-yellow-800"
+                : "bg-red-100 text-red-700"
+          }`}
+        >
+          {foodLabel}
+        </span>
+
+        <h3 className="mt-3 text-lg font-black">
+          {food.name}
+        </h3>
+
+        {food.description && (
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            {food.description}
+          </p>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-lg font-black">
+            ₹{salePrice}
+          </span>
+
+          {discounted && (
+            <span className="text-sm text-slate-400 line-through">
+              ₹{originalPrice}
+            </span>
+          )}
+        </div>
+
+        <p className="mt-2 flex items-center gap-1 text-xs text-slate-500">
+          <Clock3 size={14} />
+          Preparation: {food.preparationTime} min
+        </p>
+
+        {food.options?.length > 0 && (
+          <p className="mt-2 text-xs font-semibold text-orange-700">
+            Customisation available
+          </p>
+        )}
+
+        <p className="mt-3 text-xs text-slate-400">
+          Ordering will be enabled after cart integration.
+        </p>
+      </div>
+
+      <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-orange-50 sm:h-36 sm:w-36">
+        {image ? (
+          <img
+            src={image}
+            alt={food.name}
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <Utensils
+            size={36}
+            className="text-orange-400"
+          />
+        )}
+      </div>
+    </article>
+  );
+}
+
+function RestaurantMenuPage() {
+  const { restaurantId } =
+    useParams<{ restaurantId: string }>();
+
+  const [menu, setMenu] =
+    useState<RestaurantMenu | null>(null);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] =
+    useState<string | null>(null);
+
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadMenu() {
+      if (!restaurantId) {
+        setError("Restaurant ID is missing.");
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+      setMenu(null);
+
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/v1/restaurants/${encodeURIComponent(
+            restaurantId
+          )}`,
+          {
+            headers: {
+              Accept: "application/json",
+            },
+            signal: controller.signal,
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            response.status === 404
+              ? "Restaurant menu not found."
+              : `Unable to load menu (${response.status}).`
+          );
+        }
+
+        const result: { data: RestaurantMenu } =
+          await response.json();
+
+        if (
+          !result.data ||
+          !Array.isArray(result.data.categories)
+        ) {
+          throw new Error("Unexpected menu response.");
+        }
+
+        if (!controller.signal.aborted) {
+          setMenu(result.data);
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Unable to load restaurant menu."
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadMenu();
+
+    return () => controller.abort();
+  }, [restaurantId, retry]);
+
+  const totalFoods =
+    menu?.categories.reduce(
+      (total, category) =>
+        total + category.foods.length,
+      0
+    ) ?? 0;
+
+  return (
+    <Shell>
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        <Link
+          to="/restaurants"
+          className="inline-flex items-center gap-2 text-sm font-bold text-orange-600"
+        >
+          ← All restaurants
+        </Link>
+
+        {loading ? (
+          <div
+            className="mt-8 space-y-4"
+            aria-busy="true"
+          >
+            <div className="h-32 animate-pulse rounded-3xl bg-orange-100" />
+            <div className="h-48 animate-pulse rounded-3xl bg-orange-100" />
+          </div>
+        ) : error ? (
+          <div
+            role="alert"
+            className="mt-8 rounded-3xl border border-red-100 bg-white p-8 text-center"
+          >
+            <h1 className="text-xl font-bold text-red-700">
+              Menu couldn't be loaded
+            </h1>
+
+            <p className="mt-2 text-sm text-slate-500">
+              {error}
+            </p>
+
+            <button
+              onClick={() =>
+                setRetry((value) => value + 1)
+              }
+              className="mt-5 rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white"
+            >
+              Try again
+            </button>
+          </div>
+        ) : menu ? (
+          <>
+            <section className="mt-6 rounded-3xl bg-gradient-to-br from-orange-500 to-amber-500 p-7 text-white sm:p-10">
+              <p className="text-xs font-bold uppercase tracking-widest text-orange-100">
+                Restaurant menu
+              </p>
+
+              <h1 className="mt-2 text-3xl font-black sm:text-4xl">
+                {menu.name}
+              </h1>
+
+              <p className="mt-3 text-sm text-orange-50">
+                {totalFoods} available food item
+                {totalFoods === 1 ? "" : "s"}
+              </p>
+            </section>
+
+            {totalFoods === 0 ? (
+              <div className="mt-8 rounded-3xl border border-orange-100 bg-white p-10 text-center">
+                <Utensils
+                  size={36}
+                  className="mx-auto text-orange-500"
+                />
+
+                <h2 className="mt-4 text-xl font-bold">
+                  No menu items available yet
+                </h2>
+
+                <p className="mt-2 text-sm text-slate-500">
+                  Please check back later or explore another
+                  restaurant.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-8 space-y-10">
+                {menu.categories
+                  .filter(
+                    (category) =>
+                      category.foods.length > 0
+                  )
+                  .map((category) => (
+                    <section key={category.id}>
+                      <h2 className="mb-5 text-2xl font-black">
+                        {category.name}
+                      </h2>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        {category.foods.map((food) => (
+                          <FoodCard
+                            key={food.id}
+                            food={food}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+              </div>
+            )}
+          </>
+        ) : null}
       </main>
     </Shell>
   );
@@ -599,12 +994,15 @@ function SimplePage({
         <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-orange-100 text-orange-600">
           <Store />
         </div>
+
         <h1 className="mt-6 text-4xl font-black">
           {title}
         </h1>
+
         <p className="mx-auto mt-4 max-w-xl text-slate-500">
           {text}
         </p>
+
         <Link
           to="/"
           className="mt-7 inline-flex rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white"
@@ -619,11 +1017,19 @@ function SimplePage({
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Home />} />
+      <Route
+        path="/"
+        element={<Home />}
+      />
 
       <Route
         path="/restaurants"
         element={<RestaurantsPage />}
+      />
+
+      <Route
+        path="/restaurants/:restaurantId"
+        element={<RestaurantMenuPage />}
       />
 
       <Route
@@ -663,3 +1069,4 @@ export default function App() {
     </Routes>
   );
 }
+
