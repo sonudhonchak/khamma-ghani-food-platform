@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Link,
   Route,
@@ -13,15 +13,48 @@ import {
   Bike,
   ChevronRight,
   Clock3,
+  LogOut,
   MapPin,
   Search,
   ShieldCheck,
   ShoppingBag,
   Store,
+  UserRound,
   Utensils,
 } from "lucide-react";
 
 const API_BASE = "https://khamma-ghani-api.vercel.app";
+const TOKEN_KEY = "khamma_customer_token";
+const USER_KEY = "khamma_customer_user";
+
+type Customer = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  role: string;
+  status: string;
+  profileImage?: string | null;
+};
+
+type Session = {
+  token: string;
+  user: Customer;
+};
+
+type ApiError = {
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
+type AuthResponse = ApiError & {
+  data?: {
+    token: string;
+    user: Customer;
+  };
+};
 
 type Restaurant = {
   id: string;
@@ -108,7 +141,98 @@ const categories = [
   { label: "Sweets", icon: "🍮" },
 ];
 
-function Shell({ children }: { children: React.ReactNode }) {
+function readSession(): Session | null {
+  try {
+    const token = sessionStorage.getItem(TOKEN_KEY);
+    const rawUser = sessionStorage.getItem(USER_KEY);
+
+    if (!token || !rawUser) return null;
+
+    const user = JSON.parse(rawUser) as Customer;
+
+    if (
+      !user ||
+      typeof user.id !== "string" ||
+      typeof user.name !== "string" ||
+      user.role !== "CUSTOMER" ||
+      user.status !== "ACTIVE"
+    ) {
+      return null;
+    }
+
+    return { token, user };
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(session: Session) {
+  sessionStorage.setItem(TOKEN_KEY, session.token);
+  sessionStorage.setItem(USER_KEY, JSON.stringify(session.user));
+  window.dispatchEvent(new Event("khamma-auth-change"));
+}
+
+function clearSession() {
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(USER_KEY);
+  window.dispatchEvent(new Event("khamma-auth-change"));
+}
+
+function useCustomerSession() {
+  const [session, setSession] = useState<Session | null>(readSession);
+
+  useEffect(() => {
+    const update = () => setSession(readSession());
+
+    window.addEventListener("khamma-auth-change", update);
+
+    return () => {
+      window.removeEventListener("khamma-auth-change", update);
+    };
+  }, []);
+
+  return session;
+}
+
+async function logoutCustomer() {
+  const session = readSession();
+
+  // Clear the local session immediately, even if the network fails.
+  clearSession();
+
+  if (!session) return;
+
+  try {
+    await fetch(`${API_BASE}/api/v1/auth/logout`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+        Accept: "application/json",
+      },
+    });
+  } catch {
+    // Server revocation may fail if offline.
+  }
+}
+
+function Shell({ children }: { children: ReactNode }) {
+  const session = useCustomerSession();
+  const navigate = useNavigate();
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    if (loggingOut) return;
+
+    setLoggingOut(true);
+
+    try {
+      await logoutCustomer();
+      navigate("/", { replace: true });
+    } finally {
+      setLoggingOut(false);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#fffaf4] text-slate-900">
       <header className="sticky top-0 z-50 border-b border-orange-100/80 bg-[#fffaf4]/90 backdrop-blur-xl">
@@ -153,12 +277,36 @@ function Shell({ children }: { children: React.ReactNode }) {
               </span>
             </Link>
 
-            <Link
-              to="/login"
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
-            >
-              Login
-            </Link>
+            {session ? (
+              <div className="flex items-center gap-2">
+                <span
+                  className="hidden max-w-32 items-center gap-1 truncate text-sm font-bold text-slate-700 sm:inline-flex"
+                  title={session.user.name}
+                >
+                  <UserRound size={16} />
+                  {session.user.name}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => void handleLogout()}
+                  disabled={loggingOut}
+                  className="inline-flex items-center gap-1 rounded-xl bg-slate-900 px-3 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-60"
+                >
+                  <LogOut size={16} />
+                  <span className="hidden sm:inline">
+                    {loggingOut ? "..." : "Logout"}
+                  </span>
+                </button>
+              </div>
+            ) : (
+              <Link
+                to="/login"
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+              >
+                Login
+              </Link>
+            )}
           </div>
         </div>
       </header>
@@ -981,6 +1129,383 @@ function RestaurantMenuPage() {
   );
 }
 
+function AuthPage() {
+  const navigate = useNavigate();
+  const session = useCustomerSession();
+
+  const [mode, setMode] =
+    useState<"login" | "register">("login");
+
+  const [name, setName] = useState("");
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const isRegister = mode === "register";
+
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+
+    if (loading) return;
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const value = identifier.trim();
+
+      if (!value) {
+        throw new Error(
+          "Please enter your email or mobile number."
+        );
+      }
+
+      if (isRegister && name.trim().length < 2) {
+        throw new Error(
+          "Please enter your full name."
+        );
+      }
+
+      if (isRegister && password.length < 8) {
+        throw new Error(
+          "Password must contain at least 8 characters."
+        );
+      }
+
+      const endpoint = isRegister ? "register" : "login";
+
+      const payload = isRegister
+        ? {
+            name: name.trim(),
+            ...(value.includes("@")
+              ? { email: value }
+              : { phone: value }),
+            password,
+          }
+        : {
+            identifier: value,
+            password,
+          };
+
+      const response = await fetch(
+        `${API_BASE}/api/v1/auth/${endpoint}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const result =
+        (await response.json()) as AuthResponse;
+
+      if (!response.ok) {
+        throw new Error(
+          result.error?.message ??
+            `Authentication failed (${response.status}).`
+        );
+      }
+
+      const user = result.data?.user;
+      const token = result.data?.token;
+
+      if (!user || !token) {
+        throw new Error(
+          "The server returned an invalid authentication response."
+        );
+      }
+
+      if (
+        user.role !== "CUSTOMER" ||
+        user.status !== "ACTIVE"
+      ) {
+        try {
+          await fetch(
+            `${API_BASE}/api/v1/auth/logout`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            }
+          );
+        } catch {
+          // Never save non-customer sessions.
+        }
+
+        throw new Error(
+          "Please sign in with an active customer account."
+        );
+      }
+
+      saveSession({ token, user });
+
+      navigate("/restaurants", {
+        replace: true,
+      });
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to authenticate. Please try again."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (session) {
+    return (
+      <Shell>
+        <main className="mx-auto max-w-md px-4 py-16">
+          <div className="rounded-3xl border border-orange-100 bg-white p-8 text-center shadow-sm">
+            <UserRound
+              size={42}
+              className="mx-auto text-orange-600"
+            />
+
+            <h1 className="mt-4 text-2xl font-black">
+              Welcome, {session.user.name}
+            </h1>
+
+            <p className="mt-3 text-sm text-slate-500">
+              You're signed in to your customer account.
+            </p>
+
+            <Link
+              to="/restaurants"
+              className="mt-6 inline-flex rounded-xl bg-orange-600 px-5 py-3 font-bold text-white"
+            >
+              Explore restaurants
+            </Link>
+          </div>
+        </main>
+      </Shell>
+    );
+  }
+
+  return (
+    <Shell>
+      <main className="mx-auto max-w-md px-4 py-12 sm:py-16">
+        <div className="rounded-3xl border border-orange-100 bg-white p-6 shadow-xl shadow-orange-100/40 sm:p-8">
+          <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-100 text-orange-600">
+            <UserRound size={28} />
+          </div>
+
+          <p className="text-xs font-bold uppercase tracking-[0.2em] text-orange-600">
+            Khamma Ghani · Padharo Sa
+          </p>
+
+          <h1 className="mt-3 text-3xl font-black">
+            {isRegister
+              ? "Create your account"
+              : "Welcome back"}
+          </h1>
+
+          <p className="mt-3 text-sm leading-6 text-slate-500">
+            {isRegister
+              ? "Register as a customer to enjoy delicious food from local restaurants."
+              : "Sign in to continue your food ordering journey."}
+          </p>
+
+          <div className="mt-7 grid grid-cols-2 rounded-xl bg-orange-50 p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setMode("login");
+                setError("");
+                setPassword("");
+              }}
+              className={`rounded-lg px-4 py-3 text-sm font-bold ${
+                !isRegister
+                  ? "bg-white text-orange-600 shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              Login
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMode("register");
+                setError("");
+                setPassword("");
+              }}
+              className={`rounded-lg px-4 py-3 text-sm font-bold ${
+                isRegister
+                  ? "bg-white text-orange-600 shadow-sm"
+                  : "text-slate-500"
+              }`}
+            >
+              Register
+            </button>
+          </div>
+
+          <form
+            onSubmit={handleSubmit}
+            className="mt-7 space-y-5"
+          >
+            {isRegister && (
+              <div>
+                <label
+                  htmlFor="customer-name"
+                  className="mb-2 block text-sm font-bold"
+                >
+                  Full name
+                </label>
+
+                <input
+                  id="customer-name"
+                  type="text"
+                  required
+                  minLength={2}
+                  maxLength={100}
+                  autoComplete="name"
+                  value={name}
+                  onChange={(event) =>
+                    setName(event.target.value)
+                  }
+                  placeholder="Enter your full name"
+                  className="w-full rounded-xl border border-orange-200 bg-white px-4 py-3 text-sm outline-none focus:border-orange-500"
+                />
+              </div>
+            )}
+
+            <div>
+              <label
+                htmlFor="customer-identifier"
+                className="mb-2 block text-sm font-bold"
+              >
+                Email or mobile number
+              </label>
+
+              <input
+                id="customer-identifier"
+                type="text"
+                required
+                autoComplete="username"
+                value={identifier}
+                onChange={(event) =>
+                  setIdentifier(event.target.value)
+                }
+                placeholder="Email or 10-digit mobile number"
+                className="w-full rounded-xl border border-orange-200 bg-white px-4 py-3 text-sm outline-none focus:border-orange-500"
+              />
+
+              {isRegister && (
+                <p className="mt-2 text-xs text-slate-500">
+                  Use a valid email or Indian mobile number.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label
+                htmlFor="customer-password"
+                className="mb-2 block text-sm font-bold"
+              >
+                Password
+              </label>
+
+              <input
+                id="customer-password"
+                type={showPassword ? "text" : "password"}
+                required
+                minLength={isRegister ? 8 : 1}
+                maxLength={isRegister ? 128 : undefined}
+                autoComplete={
+                  isRegister
+                    ? "new-password"
+                    : "current-password"
+                }
+                value={password}
+                onChange={(event) =>
+                  setPassword(event.target.value)
+                }
+                placeholder="Enter your password"
+                className="w-full rounded-xl border border-orange-200 bg-white px-4 py-3 text-sm outline-none focus:border-orange-500"
+              />
+
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-500">
+                  {isRegister
+                    ? "Minimum 8 characters."
+                    : "Enter your account password."}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowPassword((value) => !value)
+                  }
+                  className="text-xs font-bold text-orange-600"
+                >
+                  {showPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <div
+                role="alert"
+                className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm text-red-700"
+              >
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-orange-600 px-5 py-3.5 text-sm font-bold text-white transition hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading
+                ? "Please wait..."
+                : isRegister
+                  ? "Create account"
+                  : "Login"}
+              {!loading && <ArrowRight size={17} />}
+            </button>
+          </form>
+
+          <p className="mt-6 text-center text-sm text-slate-500">
+            {isRegister
+              ? "Already have an account?"
+              : "New to Khamma Ghani?"}{" "}
+            <button
+              type="button"
+              onClick={() => {
+                setMode(isRegister ? "login" : "register");
+                setError("");
+                setPassword("");
+              }}
+              className="font-bold text-orange-600"
+            >
+              {isRegister ? "Login" : "Create account"}
+            </button>
+          </p>
+
+          <div className="mt-7 flex items-center justify-center gap-2 border-t border-orange-100 pt-5 text-xs text-slate-500">
+            <ShieldCheck
+              size={16}
+              className="text-orange-600"
+            />
+            Authentication powered by Khamma Ghani API
+          </div>
+        </div>
+      </main>
+    </Shell>
+  );
+}
+
 function SimplePage({
   title,
   text,
@@ -1049,12 +1574,7 @@ export default function App() {
 
       <Route
         path="/login"
-        element={
-          <SimplePage
-            title="Secure login"
-            text="Authentication and role-based access control will be connected to our existing backend."
-          />
-        }
+        element={<AuthPage />}
       />
 
       <Route
