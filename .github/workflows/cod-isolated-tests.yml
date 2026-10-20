@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -44,5 +46,27 @@ jobs:
       - name: Build Backend API
         run: npm run build -w @khamma-ghani/api
 
-      - name: Confirm Build Completed
-        run: echo "Khamma Ghani backend build verification completed successfully."
+      - name: Prepare original schema
+        run: |
+          git show origin/main:prisma/schema.prisma > /tmp/khamma-main-schema.prisma
+
+      - name: Generate financial audit migration preview
+        run: |
+          npx prisma migrate diff \
+            --from-schema=/tmp/khamma-main-schema.prisma \
+            --to-schema=prisma/schema.prisma \
+            --script \
+            --output=step53-migration-preview.sql
+
+      - name: Display migration preview
+        run: |
+          echo "=== SQL MIGRATION PREVIEW ONLY ==="
+          cat step53-migration-preview.sql
+          echo "=== NO DATABASE CHANGES APPLIED ==="
+
+      - name: Save migration preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: step53-migration-preview
+          path: step53-migration-preview.sql
+          retention-days: 7
