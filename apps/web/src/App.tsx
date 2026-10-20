@@ -2568,6 +2568,316 @@ function AdminDashboardPage() {
   </main></AdminLayout>;
 }
 
+
+
+// Delivery Partner Portal. Session keys are isolated from Customer, Restaurant and Admin.
+const DELIVERY_TOKEN_KEY = "khamma_delivery_partner_token";
+const DELIVERY_USER_KEY = "khamma_delivery_partner_user";
+const DELIVERY_AUTH_EVENT = "khamma-delivery-auth-change";
+type DeliverySession = { token: string; user: Customer };
+
+type DeliveryListOrder = {
+  id: string;
+  orderNumber: string;
+  orderStatus: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  total: string | number;
+  deliveryFee: string | number;
+  createdAt: string;
+  restaurant: { id: string; name: string };
+  addressCitySnapshot: string;
+  addressPincodeSnapshot: string;
+};
+type DeliveryEvent = { id: string; status: string; note: string | null; createdAt: string };
+type DeliveryOrderDetail = DeliveryListOrder & {
+  notes?: string | null;
+  addressNameSnapshot: string;
+  addressPhoneSnapshot: string;
+  addressLineSnapshot: string;
+  addressLandmarkSnapshot: string | null;
+  addressStateSnapshot: string;
+  items: Array<{ id: string; nameSnapshot: string; quantity: number; priceSnapshot: string | number }>;
+  deliveryEvents: DeliveryEvent[];
+};
+type DeliveryProgress = "ASSIGNED" | "ACCEPTED" | "AT_RESTAURANT" | "PICKED_UP" | "ON_THE_WAY" | "DELIVERED";
+const deliveryNext: Record<string, DeliveryProgress> = {
+  ASSIGNED: "ACCEPTED", ACCEPTED: "AT_RESTAURANT", AT_RESTAURANT: "PICKED_UP",
+  PICKED_UP: "ON_THE_WAY", ON_THE_WAY: "DELIVERED",
+};
+const deliveryActionLabels: Record<string, string> = {
+  ACCEPTED: "Accept assignment", AT_RESTAURANT: "Arrived at restaurant",
+  PICKED_UP: "Confirm food pickup", ON_THE_WAY: "Start delivery",
+  DELIVERED: "Mark delivered",
+};
+
+function readDeliverySession(): DeliverySession | null {
+  try {
+    const token = sessionStorage.getItem(DELIVERY_TOKEN_KEY);
+    const rawUser = sessionStorage.getItem(DELIVERY_USER_KEY);
+    if (!token || !rawUser) return null;
+    const user = JSON.parse(rawUser) as Customer;
+    if (!user || typeof user.id !== "string" || typeof user.name !== "string" ||
+        user.role !== "DELIVERY_PARTNER" || user.status !== "ACTIVE") return null;
+    return { token, user };
+  } catch { return null; }
+}
+function saveDeliverySession(session: DeliverySession) {
+  sessionStorage.setItem(DELIVERY_TOKEN_KEY, session.token);
+  sessionStorage.setItem(DELIVERY_USER_KEY, JSON.stringify(session.user));
+  window.dispatchEvent(new Event(DELIVERY_AUTH_EVENT));
+}
+function clearDeliverySession() {
+  sessionStorage.removeItem(DELIVERY_TOKEN_KEY);
+  sessionStorage.removeItem(DELIVERY_USER_KEY);
+  window.dispatchEvent(new Event(DELIVERY_AUTH_EVENT));
+}
+function useDeliverySession() {
+  const [session, setSession] = useState<DeliverySession | null>(readDeliverySession);
+  useEffect(() => {
+    const update = () => setSession(readDeliverySession());
+    window.addEventListener(DELIVERY_AUTH_EVENT, update);
+    return () => window.removeEventListener(DELIVERY_AUTH_EVENT, update);
+  }, []);
+  return session;
+}
+async function logoutDelivery() {
+  const session = readDeliverySession();
+  clearDeliverySession();
+  if (!session) return;
+  try {
+    await fetch(`${API_BASE}/api/v1/auth/logout`, {
+      method: "POST", headers: { Authorization: `Bearer ${session.token}`, Accept: "application/json" },
+    });
+  } catch { /* Clear local session even when offline. */ }
+}
+async function deliveryRequest<T>(token: string, path: string, method = "GET", body?: object): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/api/v1/delivery/orders${path}`, {
+      method,
+      headers: {
+        Accept: "application/json", Authorization: `Bearer ${token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch { throw new Error("Unable to connect to delivery service. Check your connection."); }
+  const result = (await response.json().catch(() => ({}))) as ApiError & { data?: T };
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403)
+      throw new Error("Delivery session expired or not authorized. Log out and sign in again.");
+    throw new Error(result.error?.message ?? `Delivery request failed (${response.status}).`);
+  }
+  if (result.data === undefined) throw new Error("Unexpected response from delivery API.");
+  return result.data;
+}
+function DeliveryLayout({ children }: { children: ReactNode }) {
+  const session = useDeliverySession();
+  const navigate = useNavigate();
+  const [loggingOut, setLoggingOut] = useState(false);
+  async function handleLogout() {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try { await logoutDelivery(); navigate("/delivery/login", { replace: true }); }
+    finally { setLoggingOut(false); }
+  }
+  return <div className="min-h-screen bg-[#fffaf4] text-slate-900">
+    <header className="border-b border-orange-100 bg-white">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
+        <Link to="/delivery/dashboard" className="font-black text-orange-600">Khamma Ghani
+          <span className="block text-xs font-semibold text-slate-500">Delivery Partner Portal</span>
+        </Link>
+        {session ? <button type="button" disabled={loggingOut} onClick={() => void handleLogout()}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+          {loggingOut ? "Signing out..." : "Logout"}</button>
+        : <Link to="/login" className="text-sm font-semibold text-slate-600">Customer login</Link>}
+      </div>
+    </header>
+    {children}
+  </div>;
+}
+function DeliveryLoginPage() {
+  const navigate = useNavigate();
+  const session = useDeliverySession();
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
+    setLoading(true); setError("");
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+          method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ identifier: identifier.trim(), password }),
+        });
+      } catch { throw new Error("Cannot connect to login service."); }
+      const result = (await response.json().catch(() => ({}))) as AuthResponse;
+      if (!response.ok) throw new Error(result.error?.message ?? `Login failed (${response.status}).`);
+      const user = result.data?.user;
+      const token = result.data?.token;
+      if (!user || !token) throw new Error("Invalid authentication response.");
+      if (user.role !== "DELIVERY_PARTNER" || user.status !== "ACTIVE") {
+        try { await fetch(`${API_BASE}/api/v1/auth/logout`, {
+          method: "POST", headers: { Authorization: `Bearer ${token}` },
+        }); } catch { /* Never store wrong-role session. */ }
+        throw new Error("Only an active delivery partner can sign in here.");
+      }
+      saveDeliverySession({ token, user });
+      setPassword("");
+      navigate("/delivery/dashboard", { replace: true });
+    } catch (err) { setError(err instanceof Error ? err.message : "Unable to sign in."); }
+    finally { setLoading(false); }
+  }
+  return <DeliveryLayout><main className="mx-auto max-w-md px-4 py-12 sm:py-20">
+    <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-lg sm:p-8">
+      <div className="mb-4 inline-flex rounded-2xl bg-orange-50 p-4 text-orange-600"><Bike size={28}/></div>
+      <h1 className="text-3xl font-black">Delivery Partner Login</h1>
+      <p className="mt-3 text-sm text-slate-500">Sign in with the delivery account assigned by Khamma Ghani administration.</p>
+      {session ? <div className="mt-6"><p className="font-semibold text-green-700">Already signed in as {session.user.name}.</p>
+        <Link to="/delivery/dashboard" className="mt-4 inline-block rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Go to dashboard</Link>
+      </div> : <form onSubmit={(event) => void handleLogin(event)} className="mt-7 space-y-5">
+        <label className="block"><span className="mb-2 block text-sm font-bold">Email or mobile number</span>
+          <input required autoComplete="username" value={identifier} onChange={e => setIdentifier(e.target.value)}
+            className="w-full rounded-xl border border-orange-200 px-4 py-3 outline-none focus:border-orange-500" /></label>
+        <label className="block"><span className="mb-2 block text-sm font-bold">Password</span>
+          <input required type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)}
+            className="w-full rounded-xl border border-orange-200 px-4 py-3 outline-none focus:border-orange-500" /></label>
+        {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+        <button disabled={loading} className="w-full rounded-xl bg-orange-600 px-5 py-3.5 font-bold text-white disabled:opacity-50">
+          {loading ? "Signing in..." : "Sign in as delivery partner"}</button>
+      </form>}
+    </section>
+  </main></DeliveryLayout>;
+}
+
+function DeliveryDashboardPage() {
+  const session = useDeliverySession();
+  const [orders, setOrders] = useState<DeliveryListOrder[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [detail, setDetail] = useState<DeliveryOrderDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [detailsError, setDetailsError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [actionSuccess, setActionSuccess] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    if (!session?.token) { setOrders([]); setDetail(null); return; }
+    let active = true;
+    setLoading(true); setError("");
+    void deliveryRequest<DeliveryListOrder[]>(session.token, "").then(data => {
+      if (!active) return;
+      if (!Array.isArray(data)) throw new Error("Unexpected assigned order list.");
+      setOrders(data);
+      setActionSuccess("");
+      setSelectedId(current => current && data.some(o => o.id === current) ? current : data[0]?.id ?? "");
+    }).catch(err => { if (active) setError(err instanceof Error ? err.message : "Unable to load assigned orders."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, revision]);
+
+  useEffect(() => {
+    if (!session?.token || !selectedId) { setDetail(null); return; }
+    let active = true;
+    setDetail(null); setDetailsLoading(true); setDetailsError("");
+    void deliveryRequest<DeliveryOrderDetail>(session.token, `/${encodeURIComponent(selectedId)}`).then(data => {
+      if (active) setDetail(data);
+    }).catch(err => { if (active) setDetailsError(err instanceof Error ? err.message : "Unable to load order details."); })
+      .finally(() => { if (active) setDetailsLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, selectedId, revision]);
+
+  // Only the last delivery event drives the next action. The backend remains authoritative.
+  const lastEvent = detail?.deliveryEvents?.[detail.deliveryEvents.length - 1];
+  const nextAction = lastEvent ? deliveryNext[lastEvent.status] : undefined;
+  const canAdvance = !!detail && !detailsLoading && !busy && !loading && !error && !detailsError &&
+    !actionSuccess && !!nextAction && detail.orderStatus !== "DELIVERED" && detail.orderStatus !== "CANCELLED";
+
+  async function advance() {
+    if (!session || !detail || !nextAction || !canAdvance || busy) return;
+    if (!window.confirm(`Move order ${detail.orderNumber} to delivery status ${nextAction}? This updates the live database.`)) return;
+    const orderId = detail.id;
+    setBusy(true); setActionError(""); setActionSuccess("");
+    try {
+      await deliveryRequest<{ order: { id: string; orderStatus: string }; deliveryStatus: string }>(
+        session.token, `/${encodeURIComponent(orderId)}/status`, "PATCH", { status: nextAction });
+      setActionSuccess(`Delivery status updated to ${nextAction}.`);
+      setRevision(n => n + 1);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Unable to update delivery status.");
+      // A request could have succeeded before a network error. Refresh before attempting again.
+    } finally { setBusy(false); }
+  }
+
+  if (!session) return <DeliveryLayout><main className="mx-auto max-w-3xl px-4 py-16 text-center">
+    <h1 className="text-2xl font-black">Delivery partner sign-in required</h1>
+    <Link to="/delivery/login" className="mt-5 inline-block rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Go to delivery login</Link>
+  </main></DeliveryLayout>;
+
+  return <DeliveryLayout><main className="mx-auto max-w-5xl space-y-7 px-4 py-10 sm:px-6">
+    <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+      <div className="mb-3 inline-flex rounded-2xl bg-orange-50 p-3 text-orange-600"><Bike size={25}/></div>
+      <h1 className="text-3xl font-black">My delivery orders</h1>
+      <p className="mt-2 text-sm text-slate-600">Signed in as {session.user.name}. Only orders assigned to your delivery profile are returned by the API.</p>
+      <button type="button" disabled={busy || loading} onClick={() => setRevision(n => n + 1)}
+        className="mt-5 rounded-xl border border-orange-200 px-4 py-2.5 text-sm font-bold disabled:opacity-50">Refresh orders</button>
+    </section>
+    <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+      <h2 className="text-xl font-black">Assigned orders</h2>
+      {loading && <p className="mt-4 text-sm" aria-busy="true">Loading orders...</p>}
+      {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-4 text-red-700">{error}</p>}
+      {!loading && !error && orders.length === 0 && <p className="mt-4 text-sm text-slate-600">No assigned orders found.</p>}
+      {!loading && !error && orders.map(order => <button key={order.id} type="button" disabled={busy}
+        onClick={() => { setSelectedId(order.id); setActionError(""); setActionSuccess(""); }}
+        className={`mt-3 block w-full rounded-xl border p-4 text-left disabled:opacity-50 ${selectedId === order.id ? "border-orange-500 bg-orange-50" : "border-orange-100 bg-white"}`}>
+        <span className="block font-bold">{order.orderNumber}</span>
+        <span className="mt-1 block text-sm text-slate-600">{order.restaurant.name} · {order.orderStatus}</span>
+        <span className="mt-1 block text-sm font-semibold">{money(order.total)} · {order.paymentMethod}</span>
+      </button>)}
+    </section>
+    {selectedId && <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+      <h2 className="text-xl font-black">Delivery details</h2>
+      {detailsLoading && <p className="mt-4" aria-busy="true">Loading details...</p>}
+      {detailsError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-4 text-red-700">{detailsError}</p>}
+      {detail && !detailsLoading && <div className="mt-4 space-y-5">
+        <div><h3 className="font-black">{detail.orderNumber}</h3>
+          <p className="mt-1 text-sm text-slate-600">Order: {detail.orderStatus} · Payment: {detail.paymentMethod} / {detail.paymentStatus}</p>
+          <p className="mt-2 text-xl font-black text-orange-600">{money(detail.total)}</p></div>
+        <div className="border-t pt-4"><h3 className="font-bold">Restaurant</h3><p className="mt-2 text-sm">{detail.restaurant.name}</p></div>
+        <div className="border-t pt-4"><h3 className="font-bold">Food items</h3>
+          {(detail.items ?? []).map(item => <p key={item.id} className="mt-2 text-sm">{item.nameSnapshot} × {item.quantity}</p>)}</div>
+        <div className="border-t pt-4"><h3 className="font-bold">Customer delivery address</h3>
+          <p className="mt-2 text-sm">{detail.addressNameSnapshot} · {detail.addressPhoneSnapshot}</p>
+          <p className="text-sm">{detail.addressLineSnapshot}{detail.addressLandmarkSnapshot ? `, ${detail.addressLandmarkSnapshot}` : ""}</p>
+          <p className="text-sm">{detail.addressCitySnapshot}, {detail.addressStateSnapshot} - {detail.addressPincodeSnapshot}</p></div>
+        <div className="border-t pt-4"><h3 className="font-bold">Delivery history</h3>
+          {(detail.deliveryEvents ?? []).map(e => <div key={e.id} className="mt-3 border-l-2 border-orange-300 pl-3 text-sm">
+            <p className="font-bold">{e.status}</p><p className="text-xs text-slate-500">{new Date(e.createdAt).toLocaleString()}</p>
+          </div>)}
+          {!detail.deliveryEvents?.length && <p className="mt-2 text-sm text-slate-500">No delivery tracking events yet.</p>}</div>
+        <div className="border-t pt-4">
+          <p className="text-xs text-slate-600">Delivery status changes update the database. COD collection is managed separately; marking delivered does not automatically mark COD as paid.</p>
+          {actionError && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-4 text-sm text-red-700">{actionError} Refresh before retrying if the network failed.</p>}
+          {actionSuccess && <p role="status" className="mt-3 rounded-xl bg-green-50 p-4 text-sm text-green-700">{actionSuccess}</p>}
+          {nextAction && detail.orderStatus !== "DELIVERED" && detail.orderStatus !== "CANCELLED" ?
+            <button type="button" disabled={!canAdvance} onClick={() => void advance()}
+              className="mt-4 w-full rounded-xl bg-orange-600 px-5 py-3 font-bold text-white disabled:opacity-50">
+              {busy ? "Updating..." : deliveryActionLabels[nextAction]}</button>
+          : <p className="mt-4 text-sm font-semibold text-slate-600">{detail.orderStatus === "DELIVERED" ? "Delivery completed." : "No next delivery action available."}</p>}
+        </div>
+      </div>}
+    </section>}
+  </main></DeliveryLayout>;
+}
+
 function SimplePage({
   title,
   text,
@@ -2638,6 +2948,8 @@ export default function App() {
       <Route path="/restaurant/dashboard" element={<RestaurantOwnerDashboardPage />} />
       <Route path="/admin/login" element={<AdminLoginPage />} />
       <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
+      <Route path="/delivery/login" element={<DeliveryLoginPage />} />
+      <Route path="/delivery/dashboard" element={<DeliveryDashboardPage />} />
 
       <Route
         path="*"
