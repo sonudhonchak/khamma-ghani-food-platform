@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    name: COD Security and Payment Tests
+    name: COD Security and Financial Audit Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -35,5 +35,5 @@ jobs:
       - name: Install Vitest
         run: npm install --no-save --package-lock=false vitest@3.2.4
 
-      - name: Run isolated COD tests
-        run: npx vitest run apps/api/tests/deliveryCod.test.ts
+      - name: Run COD and Financial Audit Tests
+        run: npx vitest run apps/api/tests/deliveryCod.test.ts apps/api/tests/adminCod.test.ts
