@@ -11,7 +11,7 @@ jobs:
   test:
     name: COD Security and Financial Audit Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     env:
       DATABASE_URL: postgresql://test:test@127.0.0.1:1/never_connect
@@ -37,3 +37,12 @@ jobs:
 
       - name: Run COD and Financial Audit Tests
         run: npx vitest run apps/api/tests/deliveryCod.test.ts apps/api/tests/adminCod.test.ts
+
+      - name: Check Backend TypeScript
+        run: npm run typecheck -w @khamma-ghani/api
+
+      - name: Build Backend API
+        run: npm run build -w @khamma-ghani/api
+
+      - name: Confirm Build Completed
+        run: echo "Khamma Ghani backend build verification completed successfully."
