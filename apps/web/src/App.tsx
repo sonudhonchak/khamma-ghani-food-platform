@@ -2455,6 +2455,176 @@ async function adminDeliveryRequest<T>(token: string, path: string, method = "GE
   return result.data;
 }
 
+// Read-only Admin COD report. All monetary values are reported by the backend;
+// neither this component nor its refresh/pagination controls mutate payments.
+type CODReconciliationState =
+  | "PENDING_COLLECTION"
+  | "RECORDED_NOT_RECONCILED"
+  | "REVIEW_REQUIRED";
+
+type CODReconciliationRecord = {
+  orderId: string;
+  orderNumber: string;
+  createdAt: string;
+  orderStatus: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  orderTotal: string;
+  deliveryPartner: { id: string; name: string } | null;
+  payment: {
+    id: string;
+    provider: string;
+    status: string;
+    amount: string;
+    createdAt: string;
+    updatedAt: string;
+  } | null;
+  reconciliationState: CODReconciliationState;
+};
+
+type CODReconciliationReport = {
+  records: CODReconciliationRecord[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+  pageSummary: {
+    pendingCollection: number;
+    recordedNotReconciled: number;
+    reviewRequired: number;
+  };
+  message: string;
+};
+
+const codStateLabels: Record<CODReconciliationState, string> = {
+  PENDING_COLLECTION: "Pending collection record",
+  RECORDED_NOT_RECONCILED: "Recorded — not reconciled",
+  REVIEW_REQUIRED: "Review required",
+};
+
+function AdminCODReconciliation({ token }: { token: string }) {
+  const [page, setPage] = useState(1);
+  const [refresh, setRefresh] = useState(0);
+  const [report, setReport] = useState<CODReconciliationReport | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function load() {
+      setLoading(true);
+      setError("");
+      setReport(null);
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/v1/admin/cod/reconciliation?page=${page}&limit=25`,
+          {
+            method: "GET",
+            headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+        const result = (await response.json().catch(() => ({}))) as {
+          data?: CODReconciliationReport;
+          error?: { code?: string; message?: string };
+        };
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            throw new Error("Admin session rejected. Please log out and sign in again.");
+          }
+          throw new Error(result.error?.message ?? `COD report failed (${response.status}).`);
+        }
+        if (!result.data || !Array.isArray(result.data.records) ||
+            !result.data.pagination || !result.data.pageSummary) {
+          throw new Error("Unexpected COD reconciliation response.");
+        }
+        if (!controller.signal.aborted) setReport(result.data);
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          setError(err instanceof Error ? err.message : "Unable to load COD report.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    void load();
+    return () => controller.abort();
+  }, [token, page, refresh]);
+
+  const summary = report?.pageSummary;
+  const pages = report?.pagination.totalPages ?? 0;
+
+  return <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8" aria-labelledby="cod-reconciliation-heading">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h2 id="cod-reconciliation-heading" className="text-xl font-black">COD reconciliation review</h2>
+        <p className="mt-1 text-sm text-slate-600">Read-only · delivered COD orders · no payment updates</p>
+      </div>
+      <button type="button" disabled={loading} onClick={() => setRefresh((n) => n + 1)}
+        className="rounded-xl border border-orange-200 px-4 py-2 text-sm font-bold disabled:opacity-50">
+        {loading ? "Loading..." : "Refresh report"}
+      </button>
+    </div>
+    <p className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-900">
+      A recorded PAID status is not evidence of deposit or cash handover. Pending entries
+      are not necessarily collectible cash. The ₹259 simulated test order
+      (KG-4D4E113C63214C97) must not be treated as a real cash debt.
+    </p>
+    {loading && <p aria-busy="true" className="mt-5 text-sm text-slate-600">Loading reconciliation records...</p>}
+    {error && <div role="alert" className="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-700">
+      <p>{error}</p>
+      <button type="button" onClick={() => setRefresh((n) => n + 1)} className="mt-2 font-bold underline">Try again</button>
+    </div>}
+    {!loading && report && <>
+      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+        {([
+          ["Pending collection records", summary?.pendingCollection ?? 0],
+          ["Recorded, not reconciled", summary?.recordedNotReconciled ?? 0],
+          ["Review required", summary?.reviewRequired ?? 0],
+        ] as const).map(([label, count]) => <div key={label} className="rounded-2xl bg-orange-50 p-4">
+          <p className="text-2xl font-black">{count}</p>
+          <p className="mt-1 text-xs font-semibold text-slate-600">{label}</p>
+        </div>)}
+      </div>
+      <p className="mt-3 text-xs text-slate-500">
+        Counts are for page {report.pagination.page} only, not all orders.
+        Total delivered COD orders in report: {report.pagination.total}.
+      </p>
+      {report.records.length === 0 ?
+        <p className="mt-5 rounded-xl border border-orange-100 p-5 text-sm text-slate-600">No delivered COD orders on this page.</p>
+        : <div className="mt-5 space-y-3">
+          {report.records.map((order) => <article key={order.orderId} className="rounded-2xl border border-orange-100 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h3 className="break-all font-bold">{order.orderNumber}</h3>
+                <p className="mt-1 text-xs text-slate-500">{order.deliveryPartner?.name ?? "No delivery partner"}</p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-bold ${order.reconciliationState === "REVIEW_REQUIRED" ? "bg-red-50 text-red-700" : order.reconciliationState === "PENDING_COLLECTION" ? "bg-amber-50 text-amber-800" : "bg-blue-50 text-blue-800"}`}>
+                {codStateLabels[order.reconciliationState] ?? order.reconciliationState}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+              <span><strong>Order:</strong> {money(order.orderTotal)}</span>
+              <span><strong>Payment:</strong> {order.paymentStatus}</span>
+              <span><strong>Record:</strong> {order.payment ? `${order.payment.status} · ${money(order.payment.amount)} · ${order.payment.provider}` : "None"}</span>
+            </div>
+            {order.orderNumber === "KG-4D4E113C63214C97" &&
+              <p className="mt-3 text-xs font-bold text-amber-800">Simulated test order — no cash collected.</p>}
+          </article>)}
+        </div>}
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-orange-100 pt-4">
+        <p className="text-sm text-slate-600">
+          Page {report.pagination.page} of {Math.max(1, pages)}
+        </p>
+        <div className="flex gap-2">
+          <button type="button" disabled={loading || page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}
+            className="rounded-xl border border-orange-200 px-4 py-2 text-sm font-bold disabled:opacity-40">Previous</button>
+          <button type="button" disabled={loading || page >= pages} onClick={() => setPage((p) => p + 1)}
+            className="rounded-xl border border-orange-200 px-4 py-2 text-sm font-bold disabled:opacity-40">Next</button>
+        </div>
+      </div>
+    </>}
+  </section>;
+}
+
 function AdminDashboardPage() {
   const session = useAdminSession();
   const [partners, setPartners] = useState<AdminDeliveryPartner[]>([]);
@@ -2565,6 +2735,7 @@ function AdminDashboardPage() {
         <button type="submit" disabled={assigning || loading || !!listError || !selectedPartner || !orderId.trim() || !confirmOrder} className="w-full rounded-xl bg-orange-600 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{assigning ? "Assigning..." : "Assign delivery partner"}</button>
       </form>
     </section>
+    <AdminCODReconciliation token={session.token} />
   </main></AdminLayout>;
 }
 
