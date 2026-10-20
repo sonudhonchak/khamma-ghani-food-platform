@@ -1,0 +1,41 @@
+
+name: COD Security Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cod-security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Verify COD endpoint requires authentication
+        env:
+          API_URL: https://khamma-ghani-api.vercel.app
+        run: |
+          node --input-type=module <<'NODE'
+          const url = `${process.env.API_URL}/api/v1/delivery/orders/test-invalid-id/cod-collection`;
+
+          const response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              amount: 0
+            })
+          });
+
+          console.log(`HTTP status: ${response.status}`);
+
+          if (response.status !== 401) {
+            throw new Error(
+              `Expected HTTP 401, received ${response.status}`
+            );
+          }
+
+          console.log("PASS: COD endpoint rejects unauthenticated requests.");
+          NODE
