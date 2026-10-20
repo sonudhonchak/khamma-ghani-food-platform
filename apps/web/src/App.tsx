@@ -2419,19 +2419,152 @@ function AdminLoginPage() {
   </main></AdminLayout>;
 }
 
+type AdminDeliveryPartner = {
+  id: string;
+  userId: string;
+  isAvailable: boolean;
+  status: string;
+  vehicleType: string | null;
+  vehicleNumber: string | null;
+  user: { name: string; email: string | null; phone: string | null; status: string };
+};
+
+async function adminDeliveryRequest<T>(token: string, path: string, method = "GET", body?: object): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/api/v1/admin/delivery-partners${path}`, {
+      method,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    throw new Error("Unable to connect to the Admin API. Please check your connection.");
+  }
+  const result = (await response.json().catch(() => ({}))) as { data?: T; error?: { message?: string } };
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      throw new Error("Admin access was rejected. Please sign out and sign in again.");
+    }
+    throw new Error(result.error?.message ?? `Admin request failed (${response.status}).`);
+  }
+  if (result.data === undefined) throw new Error("Admin API returned an unexpected response.");
+  return result.data;
+}
+
 function AdminDashboardPage() {
   const session = useAdminSession();
+  const [partners, setPartners] = useState<AdminDeliveryPartner[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [listError, setListError] = useState("");
+  const [reload, setReload] = useState(0);
+  const [partnerId, setPartnerId] = useState("");
+  const [orderId, setOrderId] = useState("");
+  const [confirmOrder, setConfirmOrder] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState("");
+  const [assignSuccess, setAssignSuccess] = useState("");
+
+  useEffect(() => {
+    if (!session?.token) {
+      setPartners([]);
+      setPartnerId("");
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setListError("");
+    void adminDeliveryRequest<AdminDeliveryPartner[]>(session.token, "")
+      .then((data) => {
+        if (!active) return;
+        if (!Array.isArray(data)) throw new Error("Unexpected delivery partner list.");
+        setPartners(data);
+      })
+      .catch((err: unknown) => {
+        if (active) setListError(err instanceof Error ? err.message : "Unable to load partners.");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, reload]);
+
+  const eligiblePartners = partners.filter((p) => p.status === "AVAILABLE" && p.isAvailable && p.user.status === "ACTIVE");
+  const selectedPartner = eligiblePartners.find((p) => p.id === partnerId);
+
+  async function handleAssign(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (assigning || !session || !selectedPartner || !confirmOrder || !orderId.trim()) return;
+    const internalOrderId = orderId.trim();
+    if (!window.confirm(`Assign internal order ID ${internalOrderId} to ${selectedPartner.user.name}? This changes the live database.`)) return;
+    setAssigning(true);
+    setAssignError("");
+    setAssignSuccess("");
+    try {
+      const assigned = await adminDeliveryRequest<{ id: string; orderNumber: string; deliveryPartnerId: string; orderStatus: string }>(
+        session.token, `/${encodeURIComponent(selectedPartner.id)}/assign`, "POST", { orderId: internalOrderId }
+      );
+      setAssignSuccess(`Assigned order ${assigned.orderNumber} to ${selectedPartner.user.name}. Order status: ${assigned.orderStatus}.`);
+      setOrderId("");
+      setPartnerId("");
+      setConfirmOrder(false);
+      setReload((n) => n + 1);
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : "Unable to assign order.");
+      // A network failure can occur after the server saved an assignment; do not auto-retry.
+    } finally {
+      setAssigning(false);
+    }
+  }
+
   if (!session) return <AdminLayout><main className="mx-auto max-w-3xl px-4 py-16 text-center">
     <h1 className="text-2xl font-black">Administrator sign-in required</h1>
     <Link to="/admin/login" className="mt-5 inline-block rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Go to Admin Login</Link>
   </main></AdminLayout>;
-  return <AdminLayout><main className="mx-auto max-w-5xl px-4 py-12 sm:px-6">
-    <div className="rounded-3xl border border-green-200 bg-white p-6 shadow-sm sm:p-10">
-      <div className="mb-5 inline-flex rounded-2xl bg-green-50 p-4 text-green-700"><ShieldCheck size={30}/></div>
-      <h1 className="text-3xl font-black">Admin login successful</h1>
-      <p className="mt-3 text-slate-600">Welcome, {session.user.name}. Your existing account authenticated with the ADMIN role.</p>
-      <p className="mt-5 rounded-xl bg-orange-50 p-4 text-sm text-orange-900">This is a read-only verification dashboard. Delivery assignments, partner changes, and restaurant approvals are intentionally not enabled yet.</p>
-    </div>
+
+  return <AdminLayout><main className="mx-auto max-w-5xl space-y-7 px-4 py-10 sm:px-6">
+    <section className="rounded-3xl border border-green-200 bg-white p-6 shadow-sm sm:p-8">
+      <div className="mb-3 inline-flex rounded-2xl bg-green-50 p-3 text-green-700"><ShieldCheck size={26}/></div>
+      <h1 className="text-3xl font-black">Delivery administration</h1>
+      <p className="mt-2 text-sm text-slate-600">Signed in as {session.user.name} (ADMIN). Delivery assignments use the protected Khamma Ghani backend.</p>
+    </section>
+    <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-xl font-black">Delivery partners</h2>
+        <button type="button" disabled={loading || assigning} onClick={() => setReload((n) => n + 1)} className="rounded-xl border border-orange-200 px-4 py-2 text-sm font-bold disabled:opacity-50">Refresh partners</button>
+      </div>
+      {loading && <p aria-busy="true" className="mt-4 text-sm">Loading delivery partners...</p>}
+      {listError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-4 text-sm text-red-700">{listError}</p>}
+      {!loading && !listError && partners.length === 0 && <p className="mt-4 text-sm text-slate-600">No delivery partners found.</p>}
+      {!loading && !listError && partners.length > 0 && <div className="mt-5 space-y-3">
+        {partners.map((p) => <div key={p.id} className="rounded-xl border border-orange-100 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-bold">{p.user.name}</h3><span className={`rounded-full px-3 py-1 text-xs font-bold ${p.status === "AVAILABLE" && p.isAvailable && p.user.status === "ACTIVE" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-800"}`}>{p.status} · {p.isAvailable ? "Available" : "Unavailable"}</span></div>
+          <p className="mt-2 text-xs text-slate-500">Account: {p.user.status}{p.vehicleType ? ` · ${p.vehicleType}` : ""}</p>
+        </div>)}
+      </div>}
+    </section>
+    <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+      <h2 className="text-xl font-black">Assign a ready order</h2>
+      <p className="mt-2 text-sm text-slate-600">Only use this with a confirmed test order. The API requires an unassigned READY_FOR_PICKUP order and an available active partner.</p>
+      <p className="mt-2 rounded-xl bg-orange-50 p-3 text-sm text-orange-900">Enter the order's <strong>internal database ID</strong> (Order.id from Prisma Studio), not the KG- order number. Assignment changes the live database.</p>
+      <form className="mt-5 space-y-4" onSubmit={(event) => void handleAssign(event)}>
+        <label className="block"><span className="mb-2 block text-sm font-bold">Available delivery partner</span>
+          <select required disabled={loading || !!listError || assigning} value={partnerId} onChange={(event) => { setPartnerId(event.target.value); setConfirmOrder(false); setAssignError(""); }} className="w-full rounded-xl border border-orange-200 bg-white px-4 py-3">
+            <option value="">Select a partner</option>
+            {eligiblePartners.map((p) => <option key={p.id} value={p.id}>{p.user.name}{p.vehicleType ? ` — ${p.vehicleType}` : ""}</option>)}
+          </select>
+        </label>
+        {!loading && !listError && eligiblePartners.length === 0 && <p className="text-sm text-amber-800">No available active partners. Do not attempt assignment yet.</p>}
+        <label className="block"><span className="mb-2 block text-sm font-bold">Internal order ID</span>
+          <input required value={orderId} onChange={(event) => { setOrderId(event.target.value); setConfirmOrder(false); setAssignError(""); }} placeholder="Paste Order.id from Prisma Studio" autoComplete="off" className="w-full rounded-xl border border-orange-200 px-4 py-3"/>
+        </label>
+        <label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={confirmOrder} disabled={assigning} onChange={(event) => setConfirmOrder(event.target.checked)} className="mt-1"/><span>I verified this is my controlled test order, it is READY_FOR_PICKUP, and deliveryPartnerId is NULL.</span></label>
+        {assignError && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{assignError} If a network error occurred, check Prisma Studio before retrying.</p>}
+        {assignSuccess && <p role="status" className="rounded-xl bg-green-50 p-4 text-sm text-green-800">{assignSuccess}</p>}
+        <button type="submit" disabled={assigning || loading || !!listError || !selectedPartner || !orderId.trim() || !confirmOrder} className="w-full rounded-xl bg-orange-600 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">{assigning ? "Assigning..." : "Assign delivery partner"}</button>
+      </form>
+    </section>
   </main></AdminLayout>;
 }
 
