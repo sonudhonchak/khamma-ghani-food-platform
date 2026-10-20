@@ -9,30 +9,31 @@ permissions:
 
 jobs:
   test:
+    name: COD Security and Payment Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     env:
-      # Never use your production DATABASE_URL here
       DATABASE_URL: postgresql://test:test@127.0.0.1:1/never_connect
+      NODE_ENV: test
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configure Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
 
-      - name: Install workspace dependencies
-        run: npm ci
+      - name: Install dependencies
+        run: npm install --no-package-lock
 
-      - name: Generate Prisma client
+      - name: Generate Prisma Client
         run: npm run db:generate
 
-      - name: Install isolated test runner
+      - name: Install Vitest
         run: npm install --no-save --package-lock=false vitest@3.2.4
 
-      - name: Run mocked COD tests
+      - name: Run isolated COD tests
         run: npx vitest run apps/api/tests/deliveryCod.test.ts
