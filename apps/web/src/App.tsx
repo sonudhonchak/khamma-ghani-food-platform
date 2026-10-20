@@ -1919,6 +1919,355 @@ function OrderDetailsPage() {
   </main></Shell>;
 }
 
+
+// Restaurant partner portal: isolated from existing customer authentication and cart.
+const OWNER_TOKEN_KEY = "khamma_restaurant_owner_token";
+const OWNER_USER_KEY = "khamma_restaurant_owner_user";
+const OWNER_AUTH_EVENT = "khamma-owner-auth-change";
+
+type OwnerSession = { token: string; user: Customer };
+type RestaurantOrder = {
+  id: string;
+  orderNumber: string;
+  restaurantId: string;
+  orderStatus: string;
+  paymentMethod: string;
+  paymentStatus: string;
+  total: string | number;
+  subtotal: string | number;
+  deliveryFee: string | number;
+  createdAt: string;
+  notes?: string | null;
+  addressNameSnapshot?: string;
+  addressPhoneSnapshot?: string;
+  addressLineSnapshot?: string;
+  addressLandmarkSnapshot?: string | null;
+  addressCitySnapshot?: string;
+  addressStateSnapshot?: string;
+  addressPincodeSnapshot?: string;
+  restaurant?: { id: string; name: string };
+  items: Array<{
+    id: string;
+    nameSnapshot: string;
+    priceSnapshot: string | number;
+    quantity: number;
+  }>;
+  statusHistory?: Array<{
+    id: string;
+    status: string;
+    note: string | null;
+    createdAt: string;
+  }>;
+};
+
+function readOwnerSession(): OwnerSession | null {
+  try {
+    const token = sessionStorage.getItem(OWNER_TOKEN_KEY);
+    const rawUser = sessionStorage.getItem(OWNER_USER_KEY);
+    if (!token || !rawUser) return null;
+    const user = JSON.parse(rawUser) as Customer;
+    if (!user || typeof user.id !== "string" || typeof user.name !== "string" ||
+        user.role !== "RESTAURANT_OWNER" || user.status !== "ACTIVE") return null;
+    return { token, user };
+  } catch {
+    return null;
+  }
+}
+
+function saveOwnerSession(session: OwnerSession) {
+  sessionStorage.setItem(OWNER_TOKEN_KEY, session.token);
+  sessionStorage.setItem(OWNER_USER_KEY, JSON.stringify(session.user));
+  window.dispatchEvent(new Event(OWNER_AUTH_EVENT));
+}
+
+function clearOwnerSession() {
+  sessionStorage.removeItem(OWNER_TOKEN_KEY);
+  sessionStorage.removeItem(OWNER_USER_KEY);
+  window.dispatchEvent(new Event(OWNER_AUTH_EVENT));
+}
+
+function useOwnerSession() {
+  const [session, setSession] = useState<OwnerSession | null>(readOwnerSession);
+  useEffect(() => {
+    const update = () => setSession(readOwnerSession());
+    window.addEventListener(OWNER_AUTH_EVENT, update);
+    return () => window.removeEventListener(OWNER_AUTH_EVENT, update);
+  }, []);
+  return session;
+}
+
+async function logoutOwner() {
+  const session = readOwnerSession();
+  clearOwnerSession();
+  if (!session) return;
+  try {
+    await fetch(`${API_BASE}/api/v1/auth/logout`, {
+      method: "POST",
+      headers: { Accept: "application/json", Authorization: `Bearer ${session.token}` },
+    });
+  } catch {
+    // Clear local session even when the network or server is unavailable.
+  }
+}
+
+async function ownerRequest<T>(path: string, method = "GET", body?: object): Promise<T> {
+  const session = readOwnerSession();
+  if (!session) throw new Error("Please sign in with your restaurant owner account.");
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}/api/v1/restaurant/orders${path}`, {
+      method,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${session.token}`,
+        ...(body ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    throw new Error("Unable to connect to the restaurant order service.");
+  }
+  const result = (await response.json().catch(() => ({}))) as ApiError & { data?: T };
+  if (!response.ok) {
+    if (response.status === 401) throw new Error("Your restaurant session has expired. Please log out and sign in again.");
+    if (response.status === 403) throw new Error("This account is not authorized to manage restaurant orders.");
+    throw new Error(result.error?.message ?? `Restaurant request failed (${response.status}).`);
+  }
+  if (result.data === undefined) throw new Error("Unexpected restaurant API response.");
+  return result.data;
+}
+
+function OwnerLayout({ children }: { children: ReactNode }) {
+  const session = useOwnerSession();
+  const navigate = useNavigate();
+  const [signingOut, setSigningOut] = useState(false);
+  async function handleLogout() {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await logoutOwner();
+      navigate("/restaurant/login", { replace: true });
+    } finally {
+      setSigningOut(false);
+    }
+  }
+  return <div className="min-h-screen bg-[#fffaf4] text-slate-900">
+    <header className="border-b border-orange-100 bg-white">
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6">
+        <Link to="/restaurant/dashboard" className="font-black text-orange-600">
+          Khamma Ghani <span className="block text-xs font-semibold text-slate-500">Restaurant Partner Portal</span>
+        </Link>
+        <div className="flex items-center gap-3">
+          {session ? <>
+            <span className="hidden text-sm font-semibold text-slate-600 sm:inline">{session.user.name}</span>
+            <button type="button" onClick={() => void handleLogout()} disabled={signingOut}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+              {signingOut ? "Signing out..." : "Logout"}
+            </button>
+          </> : <Link to="/login" className="text-sm font-semibold text-slate-600">Customer login</Link>}
+        </div>
+      </div>
+    </header>
+    {children}
+  </div>;
+}
+
+function RestaurantOwnerLoginPage() {
+  const navigate = useNavigate();
+  const session = useOwnerSession();
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
+    setError("");
+    setLoading(true);
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ identifier: identifier.trim(), password }),
+        });
+      } catch {
+        throw new Error("Cannot connect to the login service.");
+      }
+      const result = (await response.json().catch(() => ({}))) as AuthResponse;
+      if (!response.ok) throw new Error(result.error?.message ?? `Login failed (${response.status}).`);
+      const token = result.data?.token;
+      const user = result.data?.user;
+      if (!token || !user) throw new Error("Invalid authentication response.");
+      if (user.role !== "RESTAURANT_OWNER" || user.status !== "ACTIVE") {
+        try {
+          await fetch(`${API_BASE}/api/v1/auth/logout`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        } catch { /* Do not store unauthorized sessions. */ }
+        throw new Error("Only an active restaurant owner can sign in here.");
+      }
+      saveOwnerSession({ token, user });
+      navigate("/restaurant/dashboard", { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to log in.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return <OwnerLayout><main className="mx-auto max-w-md px-4 py-12 sm:py-20">
+    <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-lg sm:p-8">
+      <div className="mb-4 inline-flex rounded-2xl bg-orange-50 p-4 text-orange-600"><Store size={28}/></div>
+      <h1 className="text-3xl font-black">Restaurant Owner Login</h1>
+      <p className="mt-3 text-sm text-slate-500">Sign in with the restaurant-owner account already registered on Khamma Ghani.</p>
+      {session ? <div className="mt-6">
+        <p className="text-sm font-semibold text-green-700">Already signed in as {session.user.name}.</p>
+        <Link to="/restaurant/dashboard" className="mt-4 inline-block rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Go to dashboard</Link>
+      </div> : <form onSubmit={(event) => void handleLogin(event)} className="mt-7 space-y-5">
+        <label className="block"><span className="mb-2 block text-sm font-bold">Email or mobile number</span>
+          <input required autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)}
+            placeholder="Your owner account email or phone" className="w-full rounded-xl border border-orange-200 px-4 py-3 outline-none focus:border-orange-500"/>
+        </label>
+        <label className="block"><span className="mb-2 block text-sm font-bold">Password</span>
+          <input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)}
+            className="w-full rounded-xl border border-orange-200 px-4 py-3 outline-none focus:border-orange-500"/>
+        </label>
+        {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+        <button type="submit" disabled={loading} className="w-full rounded-xl bg-orange-600 px-5 py-3.5 font-bold text-white disabled:opacity-50">
+          {loading ? "Signing in..." : "Sign in as restaurant owner"}
+        </button>
+      </form>}
+      <Link to="/login" className="mt-6 block text-center text-sm font-bold text-orange-700">Looking for customer login?</Link>
+    </section>
+  </main></OwnerLayout>;
+}
+
+const restaurantNextStatus: Record<string, "CONFIRMED" | "PREPARING" | "READY_FOR_PICKUP"> = {
+  PLACED: "CONFIRMED", CONFIRMED: "PREPARING", PREPARING: "READY_FOR_PICKUP",
+};
+const restaurantActionLabel: Record<string, string> = {
+  CONFIRMED: "Accept order", PREPARING: "Start preparing", READY_FOR_PICKUP: "Mark ready for pickup",
+};
+
+function RestaurantOwnerDashboardPage() {
+  const session = useOwnerSession();
+  const [orders, setOrders] = useState<RestaurantOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [details, setDetails] = useState<RestaurantOrder | null>(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState("");
+  const [updating, setUpdating] = useState(false);
+
+  useEffect(() => {
+    if (!session) { setLoading(false); setOrders([]); return; }
+    let active = true;
+    setLoading(true);
+    setError("");
+    void ownerRequest<RestaurantOrder[]>("").then((list) => {
+      if (active) setOrders(list);
+    }).catch((err: unknown) => {
+      if (active) setError(err instanceof Error ? err.message : "Unable to load restaurant orders.");
+    }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, reload]);
+
+  useEffect(() => {
+    if (!session || !selectedId) { setDetails(null); return; }
+    let active = true;
+    setDetails(null);
+    setDetailsError("");
+    setDetailsLoading(true);
+    void ownerRequest<RestaurantOrder>(`/${encodeURIComponent(selectedId)}`).then((order) => {
+      if (active) setDetails(order);
+    }).catch((err: unknown) => {
+      if (active) setDetailsError(err instanceof Error ? err.message : "Unable to load details.");
+    }).finally(() => { if (active) setDetailsLoading(false); });
+    return () => { active = false; };
+  }, [session?.token, selectedId, reload]);
+
+  async function advanceOrder() {
+    const next = details && restaurantNextStatus[details.orderStatus];
+    if (!details || !next || updating) return;
+    if (!window.confirm(`Update ${details.orderNumber} to ${next}? This changes the real order status.`)) return;
+    setUpdating(true);
+    setDetailsError("");
+    try {
+      const updated = await ownerRequest<RestaurantOrder>(
+        `/${encodeURIComponent(details.id)}/status`, "PATCH", { status: next }
+      );
+      setDetails(updated);
+      setOrders((previous) => previous.map((order) =>
+        order.id === updated.id ? { ...order, orderStatus: updated.orderStatus } : order
+      ));
+    } catch (err) {
+      setDetailsError(err instanceof Error ? err.message : "Unable to change order status.");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  return <OwnerLayout><main className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+    <div className="flex flex-wrap items-center justify-between gap-4">
+      <div><p className="text-xs font-bold uppercase tracking-widest text-orange-600">Restaurant Partner</p>
+        <h1 className="mt-2 text-3xl font-black">Incoming Orders</h1>
+        <p className="mt-2 text-sm text-slate-500">Only orders for restaurants linked to your owner account are returned by the API.</p>
+      </div>
+      <button onClick={() => setReload((n) => n + 1)} className="rounded-xl border border-orange-200 bg-white px-4 py-3 text-sm font-bold">Refresh orders</button>
+    </div>
+    {!session ? <section className="mt-8 rounded-3xl bg-white p-8">
+      <p className="font-semibold">Sign in as a restaurant owner to view incoming orders.</p>
+      <Link to="/restaurant/login" className="mt-5 inline-block rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Restaurant login</Link>
+    </section> : <div className="mt-7 grid gap-6 lg:grid-cols-[1fr_1fr]">
+      <section>
+        {loading ? <p aria-busy="true">Loading restaurant orders...</p>
+        : error ? <div role="alert" className="rounded-2xl bg-red-50 p-5 text-red-700">{error}<button className="ml-3 font-bold underline" onClick={() => setReload((n) => n + 1)}>Retry</button></div>
+        : !orders.length ? <div className="rounded-3xl border border-orange-100 bg-white p-8"><h2 className="font-black">No restaurant orders yet</h2><p className="mt-2 text-sm text-slate-500">New orders will appear here. Tap Refresh orders to check again.</p></div>
+        : <div className="space-y-3">{orders.map((order) => <button type="button" key={order.id} onClick={() => setSelectedId(order.id)}
+            className={`block w-full rounded-2xl border bg-white p-5 text-left shadow-sm ${selectedId === order.id ? "border-orange-500" : "border-orange-100"}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-black">{order.orderNumber}</span><span className="rounded-full bg-orange-50 px-3 py-1 text-xs font-bold text-orange-700">{order.orderStatus}</span></div>
+            <p className="mt-2 text-sm text-slate-500">{order.restaurant?.name ?? "Restaurant"} · {new Date(order.createdAt).toLocaleString("en-IN")}</p>
+            <p className="mt-3 font-black">{money(order.total)} <span className="text-xs font-semibold text-slate-500">· {order.paymentMethod}</span></p>
+            <span className="mt-2 block text-xs font-bold text-orange-600">View details →</span>
+          </button>)}</div>}
+      </section>
+      <section className="h-fit rounded-3xl border border-orange-100 bg-white p-6 lg:sticky lg:top-6">
+        <h2 className="text-xl font-black">Order details</h2>
+        {!selectedId ? <p className="mt-4 text-sm text-slate-500">Select an order to view its details and available actions.</p>
+        : detailsLoading ? <p className="mt-4" aria-busy="true">Loading order details...</p>
+        : detailsError && !details ? <p role="alert" className="mt-4 text-sm text-red-700">{detailsError}</p>
+        : details ? <div className="mt-4 space-y-5">
+          <div><p className="text-lg font-black">{details.orderNumber}</p><p className="mt-1 text-sm text-slate-500">Status: {details.orderStatus} · Payment: {details.paymentMethod} / {details.paymentStatus}</p>
+          <p className="mt-2 text-xl font-black text-orange-600">{money(details.total)}</p></div>
+          <div className="border-t pt-4"><h3 className="font-black">Items</h3>
+            <div className="mt-3 space-y-2">{details.items.map((item) => <div key={item.id} className="flex justify-between gap-3 text-sm"><span>{item.nameSnapshot} × {item.quantity}</span><span className="font-semibold">{money(Number(item.priceSnapshot) * item.quantity)}</span></div>)}</div>
+          </div>
+          {details.addressLineSnapshot && <div className="border-t pt-4"><h3 className="font-black">Delivery address</h3>
+            <p className="mt-2 text-sm text-slate-600">{details.addressNameSnapshot} {details.addressPhoneSnapshot ? `· ${details.addressPhoneSnapshot}` : ""}</p>
+            <p className="mt-1 text-sm text-slate-600">{details.addressLineSnapshot}{details.addressLandmarkSnapshot ? `, ${details.addressLandmarkSnapshot}` : ""}, {details.addressCitySnapshot}, {details.addressStateSnapshot} - {details.addressPincodeSnapshot}</p>
+          </div>}
+          {details.notes && <div className="border-t pt-4"><h3 className="font-black">Customer instructions</h3><p className="mt-2 text-sm">{details.notes}</p></div>}
+          <div className="border-t pt-4"><h3 className="font-black">Status history</h3>
+            {!details.statusHistory?.length ? <p className="mt-2 text-sm text-slate-500">No status events recorded.</p> :
+              <div className="mt-3 space-y-2">{details.statusHistory.map((event) => <div key={event.id} className="border-l-2 border-orange-300 pl-3 text-sm"><span className="font-semibold">{event.status}</span><p className="text-xs text-slate-500">{new Date(event.createdAt).toLocaleString("en-IN")}</p>{event.note && <p className="text-slate-600">{event.note}</p>}</div>)}</div>}
+          </div>
+          {detailsError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{detailsError}</p>}
+          {restaurantNextStatus[details.orderStatus] ? <button type="button" onClick={() => void advanceOrder()} disabled={updating}
+            className="w-full rounded-xl bg-orange-600 px-5 py-3 font-bold text-white disabled:opacity-50">
+            {updating ? "Updating order..." : restaurantActionLabel[restaurantNextStatus[details.orderStatus]]}
+          </button> : <p className="rounded-xl bg-green-50 p-3 text-sm font-semibold text-green-800">No further restaurant-side status action is available for this order.</p>}
+        </div> : null}
+      </section>
+    </div>}
+  </main></OwnerLayout>;
+}
+
 function SimplePage({
   title,
   text,
@@ -1984,6 +2333,9 @@ export default function App() {
         path="/login"
         element={<AuthPage />}
       />
+
+      <Route path="/restaurant/login" element={<RestaurantOwnerLoginPage />} />
+      <Route path="/restaurant/dashboard" element={<RestaurantOwnerDashboardPage />} />
 
       <Route
         path="*"
