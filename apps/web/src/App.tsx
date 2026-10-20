@@ -2268,6 +2268,173 @@ function RestaurantOwnerDashboardPage() {
   </main></OwnerLayout>;
 }
 
+
+// Admin portal: an isolated session. Customer and restaurant owner sessions stay unchanged.
+const ADMIN_TOKEN_KEY = "khamma_admin_token";
+const ADMIN_USER_KEY = "khamma_admin_user";
+const ADMIN_AUTH_EVENT = "khamma-admin-auth-change";
+
+type AdminSession = { token: string; user: Customer };
+
+function readAdminSession(): AdminSession | null {
+  try {
+    const token = sessionStorage.getItem(ADMIN_TOKEN_KEY);
+    const rawUser = sessionStorage.getItem(ADMIN_USER_KEY);
+    if (!token || !rawUser) return null;
+    const user = JSON.parse(rawUser) as Customer;
+    if (!user || typeof user.id !== "string" || typeof user.name !== "string" ||
+        user.role !== "ADMIN" || user.status !== "ACTIVE") return null;
+    return { token, user };
+  } catch { return null; }
+}
+
+function saveAdminSession(session: AdminSession) {
+  sessionStorage.setItem(ADMIN_TOKEN_KEY, session.token);
+  sessionStorage.setItem(ADMIN_USER_KEY, JSON.stringify(session.user));
+  window.dispatchEvent(new Event(ADMIN_AUTH_EVENT));
+}
+
+function clearAdminSession() {
+  sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+  sessionStorage.removeItem(ADMIN_USER_KEY);
+  window.dispatchEvent(new Event(ADMIN_AUTH_EVENT));
+}
+
+function useAdminSession() {
+  const [session, setSession] = useState<AdminSession | null>(readAdminSession);
+  useEffect(() => {
+    const update = () => setSession(readAdminSession());
+    window.addEventListener(ADMIN_AUTH_EVENT, update);
+    return () => window.removeEventListener(ADMIN_AUTH_EVENT, update);
+  }, []);
+  return session;
+}
+
+async function logoutAdmin() {
+  const session = readAdminSession();
+  clearAdminSession();
+  if (!session) return;
+  try {
+    await fetch(`${API_BASE}/api/v1/auth/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.token}`, Accept: "application/json" },
+    });
+  } catch { /* Local logout must work even if the network is unavailable. */ }
+}
+
+function AdminLayout({ children }: { children: ReactNode }) {
+  const session = useAdminSession();
+  const navigate = useNavigate();
+  const [signingOut, setSigningOut] = useState(false);
+  async function handleLogout() {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await logoutAdmin();
+      navigate("/admin/login", { replace: true });
+    } finally { setSigningOut(false); }
+  }
+  return <div className="min-h-screen bg-[#fffaf4] text-slate-900">
+    <header className="border-b border-orange-100 bg-white">
+      <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:px-6">
+        <Link to="/admin/dashboard" className="font-black text-orange-600">
+          Khamma Ghani <span className="block text-xs font-semibold text-slate-500">Administrator Portal</span>
+        </Link>
+        {session ? <button type="button" disabled={signingOut} onClick={() => void handleLogout()}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">
+          {signingOut ? "Signing out..." : "Logout"}
+        </button> : <Link className="text-sm font-semibold text-orange-700" to="/login">Customer login</Link>}
+      </div>
+    </header>
+    {children}
+  </div>;
+}
+
+function AdminLoginPage() {
+  const navigate = useNavigate();
+  const session = useAdminSession();
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (loading) return;
+    setLoading(true);
+    setError("");
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/api/v1/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ identifier: identifier.trim(), password }),
+        });
+      } catch { throw new Error("Cannot connect to the login service."); }
+      const result = (await response.json().catch(() => ({}))) as AuthResponse;
+      if (!response.ok) throw new Error(result.error?.message ?? `Login failed (${response.status}).`);
+      const token = result.data?.token;
+      const user = result.data?.user;
+      if (!token || !user) throw new Error("Invalid login response.");
+      if (user.role !== "ADMIN" || user.status !== "ACTIVE") {
+        try {
+          await fetch(`${API_BASE}/api/v1/auth/logout`, {
+            method: "POST", headers: { Authorization: `Bearer ${token}` },
+          });
+        } catch { /* Never store a non-admin session. */ }
+        throw new Error("This page requires an active administrator account.");
+      }
+      saveAdminSession({ token, user });
+      setPassword("");
+      navigate("/admin/dashboard", { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to sign in.");
+    } finally { setLoading(false); }
+  }
+
+  return <AdminLayout><main className="mx-auto max-w-md px-4 py-12 sm:py-20">
+    <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-lg sm:p-8">
+      <div className="mb-4 inline-flex rounded-2xl bg-orange-50 p-4 text-orange-600"><ShieldCheck size={28}/></div>
+      <h1 className="text-3xl font-black">Administrator Login</h1>
+      <p className="mt-3 text-sm text-slate-500">Use your existing Khamma Ghani ADMIN account. No registration or account changes are required.</p>
+      {session ? <div className="mt-6">
+        <p className="font-semibold text-green-700">Already signed in as an administrator.</p>
+        <Link className="mt-4 inline-block rounded-xl bg-orange-600 px-5 py-3 font-bold text-white" to="/admin/dashboard">Go to dashboard</Link>
+      </div> : <form className="mt-7 space-y-5" onSubmit={(event) => void handleLogin(event)}>
+        <label className="block"><span className="mb-2 block text-sm font-bold">Email or mobile number</span>
+          <input required autoComplete="username" value={identifier} onChange={(event) => setIdentifier(event.target.value)}
+            className="w-full rounded-xl border border-orange-200 px-4 py-3 outline-none focus:border-orange-500" />
+        </label>
+        <label className="block"><span className="mb-2 block text-sm font-bold">Password</span>
+          <input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)}
+            className="w-full rounded-xl border border-orange-200 px-4 py-3 outline-none focus:border-orange-500" />
+        </label>
+        {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">{error}</p>}
+        <button type="submit" disabled={loading} className="w-full rounded-xl bg-orange-600 px-5 py-3.5 font-bold text-white disabled:opacity-50">
+          {loading ? "Signing in..." : "Sign in as administrator"}
+        </button>
+      </form>}
+    </section>
+  </main></AdminLayout>;
+}
+
+function AdminDashboardPage() {
+  const session = useAdminSession();
+  if (!session) return <AdminLayout><main className="mx-auto max-w-3xl px-4 py-16 text-center">
+    <h1 className="text-2xl font-black">Administrator sign-in required</h1>
+    <Link to="/admin/login" className="mt-5 inline-block rounded-xl bg-orange-600 px-5 py-3 font-bold text-white">Go to Admin Login</Link>
+  </main></AdminLayout>;
+  return <AdminLayout><main className="mx-auto max-w-5xl px-4 py-12 sm:px-6">
+    <div className="rounded-3xl border border-green-200 bg-white p-6 shadow-sm sm:p-10">
+      <div className="mb-5 inline-flex rounded-2xl bg-green-50 p-4 text-green-700"><ShieldCheck size={30}/></div>
+      <h1 className="text-3xl font-black">Admin login successful</h1>
+      <p className="mt-3 text-slate-600">Welcome, {session.user.name}. Your existing account authenticated with the ADMIN role.</p>
+      <p className="mt-5 rounded-xl bg-orange-50 p-4 text-sm text-orange-900">This is a read-only verification dashboard. Delivery assignments, partner changes, and restaurant approvals are intentionally not enabled yet.</p>
+    </div>
+  </main></AdminLayout>;
+}
+
 function SimplePage({
   title,
   text,
@@ -2336,6 +2503,8 @@ export default function App() {
 
       <Route path="/restaurant/login" element={<RestaurantOwnerLoginPage />} />
       <Route path="/restaurant/dashboard" element={<RestaurantOwnerDashboardPage />} />
+      <Route path="/admin/login" element={<AdminLoginPage />} />
+      <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
 
       <Route
         path="*"
