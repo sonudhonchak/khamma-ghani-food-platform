@@ -9,9 +9,9 @@ permissions:
 
 jobs:
   test:
-    name: COD Security and Payment Tests
+    name: COD Security and Frontend Build Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     env:
       DATABASE_URL: postgresql://test:test@127.0.0.1:1/never_connect
@@ -35,5 +35,14 @@ jobs:
       - name: Install Vitest
         run: npm install --no-save --package-lock=false vitest@3.2.4
 
-      - name: Run isolated COD tests
+      - name: Run COD security tests
         run: npx vitest run apps/api/tests/deliveryCod.test.ts
+
+      - name: Check Frontend TypeScript
+        run: npm run typecheck -w @khamma-ghani/web
+
+      - name: Build Frontend
+        run: npm run build -w @khamma-ghani/web
+
+      - name: Confirm verification
+        run: echo "Khamma Ghani frontend verification completed successfully."
