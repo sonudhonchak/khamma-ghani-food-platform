@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Link,
@@ -2843,6 +2842,149 @@ async function deliveryRequest<T>(token: string, path: string, method = "GET", b
   if (result.data === undefined) throw new Error("Unexpected response from delivery API.");
   return result.data;
 }
+// Existing Hoppscotch/demo orders: never claim that test cash was received.
+// This is a UI safety check, not a substitute for server-side test-order controls.
+const KNOWN_TEST_COD_ORDER_NUMBERS = new Set([
+  "KG-4D4E113C63214C97", // ₹259 test; payment still pending
+  "KG-689D67E54D0D43CA", // ₹916 test; paid during manual Hoppscotch testing
+]);
+
+// COD API requires the exact amount. Compare as paise rather than using floats.
+function codAmountInPaise(value: string): bigint | null {
+  const trimmed = value.trim();
+  if (!/^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/.test(trimmed)) return null;
+  const [rupees, paise = ""] = trimmed.split(".");
+  const amount = BigInt(rupees) * 100n + BigInt(paise.padEnd(2, "0"));
+  return amount > 0n ? amount : null;
+}
+
+function DeliveryCODCollection({
+  detail,
+  token,
+  disabled,
+  onCollected,
+}: {
+  detail: DeliveryOrderDetail;
+  token: string;
+  disabled: boolean;
+  onCollected: () => void;
+}) {
+  const [receivedAmount, setReceivedAmount] = useState("");
+  const [cashConfirmed, setCashConfirmed] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  if (detail.paymentMethod !== "COD") return null;
+
+  const isKnownTestOrder = KNOWN_TEST_COD_ORDER_NUMBERS.has(detail.orderNumber);
+  const eligible = detail.orderStatus === "DELIVERED" && detail.paymentStatus === "PENDING";
+  const expectedPaise = codAmountInPaise(String(detail.total));
+  const enteredPaise = codAmountInPaise(receivedAmount);
+  const exactAmount = expectedPaise !== null && enteredPaise === expectedPaise;
+  const canSubmit = eligible && !isKnownTestOrder && exactAmount && cashConfirmed &&
+    !disabled && !submitting;
+
+  async function handleCashCollection(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canSubmit || !exactAmount || !cashConfirmed) return;
+
+    const confirmation = window.confirm(
+      `Confirm actual cash collection of ${money(detail.total)} for ${detail.orderNumber}? ` +
+      "Only continue if you physically received this money. This records a PAID transaction in the live database."
+    );
+    if (!confirmation) return;
+
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      // Re-check live order state, not just the previously loaded page.
+      const latest = await deliveryRequest<DeliveryOrderDetail>(
+        token, `/${encodeURIComponent(detail.id)}`
+      );
+      if (KNOWN_TEST_COD_ORDER_NUMBERS.has(latest.orderNumber)) {
+        throw new Error("Cash collection is disabled for known simulated orders.");
+      }
+      if (latest.id !== detail.id || latest.orderNumber !== detail.orderNumber ||
+          latest.orderStatus !== "DELIVERED" || latest.paymentMethod !== "COD" ||
+          latest.paymentStatus !== "PENDING" ||
+          codAmountInPaise(String(latest.total)) !== enteredPaise) {
+        throw new Error("Order or payment details changed. Refresh before trying again.");
+      }
+
+      await deliveryRequest<{ order: { id: string; paymentStatus: string } }>(
+        token, `/${encodeURIComponent(detail.id)}/cod-collection`,
+        "POST", { amount: receivedAmount.trim() }
+      );
+      setCashConfirmed(false);
+      setReceivedAmount("");
+      setSuccess("Cash collection recorded as PAID. Deposit or handover still requires independent reconciliation.");
+      onCollected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not record COD collection.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return <section className="border-t border-orange-100 pt-5" aria-label="Cash on delivery collection">
+    <h3 className="text-lg font-black">Cash on Delivery</h3>
+    {isKnownTestOrder ? (
+      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" role="status">
+        <p className="font-bold">Known test order — cash collection disabled</p>
+        <p className="mt-2">This order was created for testing. No real money was collected.
+          Its existing payment status is preserved; do not use it as real revenue.</p>
+      </div>
+    ) : detail.paymentStatus === "PAID" ? (
+      <p className="mt-3 rounded-xl bg-green-50 p-4 text-sm text-green-800" role="status">
+        Payment is recorded as PAID. A paid database status does not prove that cash
+        was deposited or reconciled.
+      </p>
+    ) : !eligible ? (
+      <p className="mt-3 text-sm text-slate-600">
+        Cash collection is available only for a delivered COD order with payment PENDING.
+        Current payment status: {detail.paymentStatus}.
+      </p>
+    ) : (
+      <form onSubmit={(event) => void handleCashCollection(event)} className="mt-4 space-y-4">
+        <div className="rounded-xl bg-orange-50 p-4 text-sm text-slate-700">
+          <span className="block">Exact COD amount to receive</span>
+          <strong className="mt-1 block text-2xl text-orange-700">{money(detail.total)}</strong>
+          <span className="mt-2 block text-xs">Never use this action for simulated or unpaid orders.</span>
+        </div>
+        <label className="block">
+          <span className="mb-2 block text-sm font-bold">Cash actually received (₹)</span>
+          <input type="text" inputMode="decimal" autoComplete="off"
+            value={receivedAmount} onChange={(event) => setReceivedAmount(event.target.value)}
+            placeholder="Enter exact collected amount, e.g. 150.00"
+            disabled={submitting || disabled}
+            className="w-full rounded-xl border border-orange-200 bg-white px-4 py-3 outline-none focus:border-orange-500 disabled:opacity-50" />
+        </label>
+        {receivedAmount.trim() && !exactAmount && (
+          <p className="text-sm font-semibold text-amber-800">
+            Enter the exact order total before confirming collection.
+          </p>
+        )}
+        <label className="flex items-start gap-3 rounded-xl border border-orange-100 p-4 text-sm">
+          <input type="checkbox" checked={cashConfirmed} onChange={(event) => setCashConfirmed(event.target.checked)}
+            disabled={submitting || disabled} className="mt-1 h-4 w-4" />
+          <span>I physically received the full cash amount from the customer.
+            This is a genuine order, not a test transaction.</span>
+        </label>
+        {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-700">
+          {error} If the connection failed after submission, refresh the order before attempting again.
+        </p>}
+        <button type="submit" disabled={!canSubmit}
+          className="w-full rounded-xl bg-green-700 px-5 py-3 font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+          {submitting ? "Recording cash..." : `Confirm ${money(detail.total)} Cash Received`}
+        </button>
+      </form>
+    )}
+    {success && <p role="status" className="mt-3 rounded-xl bg-green-50 p-4 text-sm text-green-800">{success}</p>}
+  </section>;
+}
+
 function DeliveryLayout({ children }: { children: ReactNode }) {
   const session = useDeliverySession();
   const navigate = useNavigate();
@@ -3044,6 +3186,9 @@ function DeliveryDashboardPage() {
               {busy ? "Updating..." : deliveryActionLabels[nextAction]}</button>
           : <p className="mt-4 text-sm font-semibold text-slate-600">{detail.orderStatus === "DELIVERED" ? "Delivery completed." : "No next delivery action available."}</p>}
         </div>
+        <DeliveryCODCollection key={detail.id} detail={detail} token={session.token}
+          disabled={busy || loading || detailsLoading || !!error || !!detailsError}
+          onCollected={() => setRevision(n => n + 1)} />
       </div>}
     </section>}
   </main></DeliveryLayout>;
