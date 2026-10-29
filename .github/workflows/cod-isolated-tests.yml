@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    name: COD Security and Frontend Build Tests
+    name: COD Security and Backend Build Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -35,32 +35,11 @@ jobs:
       - name: Install Vitest
         run: npm install --no-save --package-lock=false vitest@3.2.4
 
-      - name: Run COD security tests
+      - name: Run COD Security Tests
         run: npx vitest run apps/api/tests/deliveryCod.test.ts
 
-      - name: Check Frontend TypeScript
-        run: npm run typecheck -w @khamma-ghani/web
+      - name: Check Backend TypeScript
+        run: npm run typecheck -w @khamma-ghani/api
 
-      - name: Build Frontend
-        run: npm run build -w @khamma-ghani/web
-
-      - name: Confirm verification
-        run: echo "Khamma Ghani frontend verification completed successfully."
-
-      - name: Check Preview Login CORS
-        run: |
-          echo "=== PREVIEW DOMAIN ==="
-          curl -sS -i --max-time 15 -X OPTIONS \
-            "https://khamma-ghani-api.vercel.app/api/v1/auth/login" \
-            -H "Origin: https://khamma-ghani-food-platform-git-step54-cod-frontend-sonu-f158.vercel.app" \
-            -H "Access-Control-Request-Method: POST" \
-            -H "Access-Control-Request-Headers: content-type" \
-            | grep -Ei '^HTTP/|^access-control-allow-origin:|^access-control-allow-methods:|^access-control-allow-headers:' || true
-
-          echo "=== PRODUCTION DOMAIN ==="
-          curl -sS -i --max-time 15 -X OPTIONS \
-            "https://khamma-ghani-api.vercel.app/api/v1/auth/login" \
-            -H "Origin: https://khamma-ghani-food-platform.vercel.app" \
-            -H "Access-Control-Request-Method: POST" \
-            -H "Access-Control-Request-Headers: content-type" \
-            | grep -Ei '^HTTP/|^access-control-allow-origin:' || true
+      - name: Build Backend API
+        run: npm run build -w @khamma-ghani/api
