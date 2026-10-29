@@ -20,6 +20,14 @@ const collectionSchema = z.object({
   ]),
 }).strict();
 
+// Temporary, server-enforced protection for two confirmed simulated orders.
+// These orders must never be treated as real collected cash. A future
+// database-backed TEST/REAL classification can replace this safeguard.
+const blockedTestOrderNumbers = new Set([
+  "KG-4D4E113C63214C97", // Simulated ₹259 order, still PENDING
+  "KG-689D67E54D0D43CA", // Simulated ₹916 order, manually marked PAID
+]);
+
 function getUserId(req: Request): string {
   return (req as AuthenticatedRequest).user.id;
 }
@@ -82,6 +90,16 @@ router.post("/:orderId/cod-collection", async (req, res) => {
             404,
             "ORDER_NOT_FOUND",
             "Assigned order not found."
+          );
+        }
+
+        // Enforcement happens inside the transaction before ANY payment write.
+        // It protects these orders even when the API is called directly.
+        if (blockedTestOrderNumbers.has(order.orderNumber)) {
+          return failure(
+            409,
+            "TEST_ORDER_COD_BLOCKED",
+            "Cash collection cannot be recorded for this confirmed test order."
           );
         }
 
