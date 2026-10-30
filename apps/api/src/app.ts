@@ -5,6 +5,7 @@ import express from "express";
 import authRouter from "./routes/auth.js";
 import restaurantsRouter from "./routes/restaurants.js";
 import adminRestaurantsRouter from "./routes/adminRestaurants.js";
+import adminRestaurantOwnersRouter from "./routes/adminRestaurantOwners.js";
 import restaurantMenuRouter from "./routes/restaurantMenu.js";
 import cartRouter from "./routes/cart.js";
 import addressesRouter from "./routes/addresses.js";
@@ -73,6 +74,12 @@ app.use("/api/v1/restaurants", restaurantMenuRouter);
 app.use(
   "/api/v1/admin/restaurants",
   adminRestaurantsRouter
+);
+
+// Admin Restaurant Owner account provisioning
+app.use(
+  "/api/v1/admin/restaurant-owners",
+  adminRestaurantOwnersRouter
 );
 
 // ======================================
