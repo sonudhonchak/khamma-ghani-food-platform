@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import HomePage from "./pages/HomePage";
 import {
   Link,
   Route,
@@ -3230,6 +3231,7 @@ function SimplePage({
 export default function App() {
   return (
     <Routes>
+      <Route path="/home-preview" element={<Shell><HomePage /></Shell>} />
       <Route
         path="/"
         element={<Home />}
