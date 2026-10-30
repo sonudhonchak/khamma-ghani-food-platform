@@ -35,8 +35,8 @@ jobs:
       - name: Install Vitest
         run: npm install --no-save --package-lock=false vitest@3.2.4
 
-      - name: Run COD Security Tests
-        run: npx vitest run apps/api/tests/deliveryCod.test.ts
+      - name: Run COD and Restaurant Owner Security Tests
+        run: npx vitest run apps/api/tests/deliveryCod.test.ts apps/api/tests/adminRestaurantOwners.test.ts
 
       - name: Check Backend TypeScript
         run: npm run typecheck -w @khamma-ghani/api
