@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import AdminPartnerManagement from "./AdminPartnerManagement";
 import {
   Link,
   Route,
@@ -2698,6 +2699,10 @@ function AdminDashboardPage() {
       <h1 className="text-3xl font-black">Delivery administration</h1>
       <p className="mt-2 text-sm text-slate-600">Signed in as {session.user.name} (ADMIN). Delivery assignments use the protected Khamma Ghani backend.</p>
     </section>
+    <AdminPartnerManagement
+      token={session.token}
+      onRiderCreated={() => setReload((n) => n + 1)}
+    />
     <section className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-black">Delivery partners</h2>
