@@ -6,6 +6,7 @@ import authRouter from "./routes/auth.js";
 import restaurantsRouter from "./routes/restaurants.js";
 import adminRestaurantsRouter from "./routes/adminRestaurants.js";
 import adminRestaurantOwnersRouter from "./routes/adminRestaurantOwners.js";
+import adminRestaurantOnboardingsRouter from "./routes/adminRestaurantOnboardings.js";
 import restaurantMenuRouter from "./routes/restaurantMenu.js";
 import cartRouter from "./routes/cart.js";
 import addressesRouter from "./routes/addresses.js";
@@ -80,6 +81,12 @@ app.use(
 app.use(
   "/api/v1/admin/restaurant-owners",
   adminRestaurantOwnersRouter
+);
+
+// Admin-only atomic restaurant and owner onboarding
+app.use(
+  "/api/v1/admin/restaurant-onboardings",
+  adminRestaurantOnboardingsRouter
 );
 
 // ======================================
