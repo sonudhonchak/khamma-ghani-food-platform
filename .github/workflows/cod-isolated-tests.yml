@@ -8,14 +8,15 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  cod-security-and-backend-build-tests:
     name: COD Security and Backend Build Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    # Tests use mocked Prisma, never production DB.
     env:
-      DATABASE_URL: postgresql://test:test@127.0.0.1:1/never_connect
       NODE_ENV: test
+      DATABASE_URL: postgresql://test:test@127.0.0.1:1/never_connect
 
     steps:
       - name: Checkout repository
@@ -27,19 +28,23 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-package-lock
+        run: npm install --no-audit --no-fund
 
       - name: Generate Prisma Client
-        run: npm run db:generate
+        run: npx prisma generate --schema prisma/schema.prisma
 
       - name: Install Vitest
-        run: npm install --no-save --package-lock=false vitest@3.2.4
+        run: npm install --no-save --no-audit --no-fund vitest
 
-      - name: Run COD and Restaurant Owner Security Tests
-        run: npx vitest run apps/api/tests/deliveryCod.test.ts apps/api/tests/adminRestaurantOwners.test.ts
+      - name: Run COD, Restaurant Owner and Onboarding Security Tests
+        run: >-
+          npx vitest run
+          apps/api/tests/deliveryCod.test.ts
+          apps/api/tests/adminRestaurantOwners.test.ts
+          apps/api/tests/adminRestaurantOnboardings.test.ts
 
       - name: Check Backend TypeScript
-        run: npm run typecheck -w @khamma-ghani/api
+        run: npx tsc --noEmit --project apps/api/tsconfig.json
 
       - name: Build Backend API
-        run: npm run build -w @khamma-ghani/api
+        run: npm run build --prefix apps/api
