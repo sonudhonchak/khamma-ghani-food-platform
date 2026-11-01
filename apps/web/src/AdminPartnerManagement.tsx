@@ -253,6 +253,16 @@ export default function AdminPartnerManagement({
   const [approvingId, setApprovingId] =
     useState<string | null>(null);
 
+  // Password reset is separate from owner onboarding and restaurant approval.
+  const [resetRestaurantId, setResetRestaurantId] = useState("");
+  const [resetOwnerId, setResetOwnerId] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [resetConsentVerified, setResetConsentVerified] = useState(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState("");
+  const [resetSuccess, setResetSuccess] = useState("");
+
   const loadPending = useCallback(async () => {
     setPendingLoading(true);
     setPendingError("");
@@ -596,6 +606,77 @@ export default function AdminPartnerManagement({
       );
     } finally {
       setApprovingId(null);
+    }
+  }
+
+  async function resetOwnerPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (resetBusy) return;
+
+    setResetError("");
+    setResetSuccess("");
+
+    const ownerId = resetOwnerId.trim();
+    const restaurantId = resetRestaurantId.trim();
+
+    if (!ownerId || !restaurantId || ownerId.length > 100 || restaurantId.length > 100) {
+      setResetError("Select a pending restaurant, or enter its verified restaurant and owner IDs.");
+      return;
+    }
+
+    if (resetPassword.length < 12 || resetPassword.length > 128) {
+      setResetError("The new password must contain 12 to 128 characters.");
+      return;
+    }
+
+    if (resetPassword !== resetPasswordConfirm) {
+      setResetError("The passwords do not match.");
+      return;
+    }
+
+    if (!resetConsentVerified) {
+      setResetError("First verify the owner's identity and authorization.");
+      return;
+    }
+
+    if (!window.confirm(
+      "Reset this existing restaurant owner's password? Confirm the owner has authorized this action. Their previous login sessions will be revoked. This changes the live database.",
+    )) return;
+
+    setResetBusy(true);
+
+    try {
+      const outcome = await adminApi<{
+        ownerId: string;
+        restaurantId: string;
+        sessionsRevoked: number;
+      }>(
+        token,
+        `/restaurant-owners/${encodeURIComponent(ownerId)}/reset-password`,
+        {
+          method: "POST",
+          body: {
+            restaurantId,
+            newPassword: resetPassword,
+            ownerIdentityAndConsentVerified: true,
+          },
+        },
+      );
+
+      setResetSuccess(
+        `Password reset completed for the verified owner. ${outcome.sessionsRevoked} previous session(s) revoked. The owner can now sign in with the new password.`,
+      );
+    } catch (error) {
+      setResetError(
+        (error instanceof Error ? error.message : "Password reset failed.") +
+          " If the network failed, verify the owner's login status before attempting another reset.",
+      );
+    } finally {
+      // Never retain a password or consent state after making a request.
+      setResetPassword("");
+      setResetPasswordConfirm("");
+      setResetConsentVerified(false);
+      setResetBusy(false);
     }
   }
 
@@ -1151,6 +1232,125 @@ export default function AdminPartnerManagement({
             </article>
           ))}
         </div>
+      </div>
+
+      <div className="rounded-3xl border border-orange-100 bg-white p-6 shadow-sm sm:p-8">
+        <div className="flex items-start gap-3">
+          <ShieldCheck size={24} className="mt-1 text-orange-600" />
+          <div>
+            <h2 className="text-xl font-black">Reset Restaurant Owner Password</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Only for a verified existing Restaurant Owner. This does not
+              create, approve, or modify a restaurant. Resetting a password
+              revokes the owner's previous sessions.
+            </p>
+          </div>
+        </div>
+
+        {resetSuccess && (
+          <p role="status" className="mt-5 rounded-xl bg-green-50 p-4 text-sm text-green-800">
+            {resetSuccess}
+          </p>
+        )}
+        {resetError && (
+          <p role="alert" className="mt-5 rounded-xl bg-red-50 p-4 text-sm text-red-700">
+            {resetError}
+          </p>
+        )}
+
+        <form onSubmit={(event) => void resetOwnerPassword(event)} className="mt-6 space-y-4">
+          <fieldset disabled={resetBusy} className="space-y-4">
+            <label className={labelClass}>
+              Select a pending restaurant (optional)
+              <select
+                className={inputClass}
+                defaultValue=""
+                onChange={(event) => {
+                  const item = pending.find((candidate) => candidate.id === event.target.value);
+                  setResetRestaurantId(item?.id ?? "");
+                  setResetOwnerId(item?.ownerId ?? "");
+                  setResetError("");
+                  setResetSuccess("");
+                }}
+              >
+                <option value="">Enter verified IDs manually</option>
+                {pending.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} — PENDING
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <p className="text-xs text-slate-500">
+              Approved restaurants will not appear in the pending list. For
+              those, use the correct existing restaurant ID and owner ID
+              from verified Admin records. Never guess the IDs.
+            </p>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Input
+                label="Existing restaurant ID"
+                required
+                maxLength={100}
+                value={resetRestaurantId}
+                onChange={setResetRestaurantId}
+              />
+              <Input
+                label="Linked Restaurant Owner ID"
+                required
+                maxLength={100}
+                value={resetOwnerId}
+                onChange={setResetOwnerId}
+              />
+              <Input
+                label="New password (12–128 characters)"
+                required
+                type="password"
+                minLength={12}
+                maxLength={128}
+                autoComplete="new-password"
+                value={resetPassword}
+                onChange={setResetPassword}
+              />
+              <Input
+                label="Confirm new password"
+                required
+                type="password"
+                minLength={12}
+                maxLength={128}
+                autoComplete="new-password"
+                value={resetPasswordConfirm}
+                onChange={setResetPasswordConfirm}
+              />
+            </div>
+
+            <label className="flex items-start gap-3 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 accent-orange-600"
+                checked={resetConsentVerified}
+                onChange={(event) => setResetConsentVerified(event.target.checked)}
+                required
+              />
+              I have independently verified the owner's identity and explicit
+              authorization to reset this specific account's password.
+            </label>
+
+            <button
+              type="submit"
+              disabled={resetBusy}
+              className="w-full rounded-xl bg-slate-900 px-5 py-3 font-bold text-white disabled:opacity-50"
+            >
+              {resetBusy ? "Resetting password..." : "Reset existing owner password"}
+            </button>
+            <p className="text-xs text-amber-900">
+              This action changes live credentials. Do not test with an actual
+              owner's account until the Step 57 backend is approved and
+              deployed. Never share passwords in chat or screenshots.
+            </p>
+          </fieldset>
+        </form>
       </div>
     </section>
   );
