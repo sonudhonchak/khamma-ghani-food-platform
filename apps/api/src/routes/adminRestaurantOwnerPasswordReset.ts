@@ -54,12 +54,18 @@ router.post("/:ownerId/reset-password", async (req, res) => {
 
   const { restaurantId, newPassword } = parsed.data;
 
-  const adminId = (req as AuthenticatedRequest).user.id;
+  // TypeScript fix:
+  // Convert through unknown to the project's authenticated request type.
+  // Authentication and ADMIN role middleware run before this handler.
+  const adminId = (
+    req as unknown as AuthenticatedRequest
+  ).user.id;
 
   try {
-    // Never reset an Admin, Customer, or Rider using this route.
     const owner = await prisma.user.findUnique({
-      where: { id: ownerId },
+      where: {
+        id: ownerId,
+      },
       select: {
         id: true,
         role: true,
@@ -81,7 +87,6 @@ router.post("/:ownerId/reset-password", async (req, res) => {
       });
     }
 
-    // Verify the restaurant actually belongs to this owner.
     const restaurant = await prisma.restaurant.findFirst({
       where: {
         id: restaurantId,
@@ -103,7 +108,6 @@ router.post("/:ownerId/reset-password", async (req, res) => {
       });
     }
 
-    // Hash the new password before starting the transaction.
     const passwordHash = await hashPassword(newPassword);
     const revokedAt = new Date();
 
@@ -124,7 +128,6 @@ router.post("/:ownerId/reset-password", async (req, res) => {
           throw new Error("OWNER_CHANGED_DURING_RESET");
         }
 
-        // Revoke old sessions so the owner must log in again.
         const revoked = await tx.authSession.updateMany({
           where: {
             userId: ownerId,
@@ -139,7 +142,6 @@ router.post("/:ownerId/reset-password", async (req, res) => {
       }
     );
 
-    // Audit the action without logging passwords or tokens.
     console.info("Restaurant owner password reset", {
       adminId,
       ownerId,
@@ -178,4 +180,3 @@ router.post("/:ownerId/reset-password", async (req, res) => {
 });
 
 export default router;
-            
