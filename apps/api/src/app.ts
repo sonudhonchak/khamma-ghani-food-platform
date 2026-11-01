@@ -7,6 +7,7 @@ import restaurantsRouter from "./routes/restaurants.js";
 import adminRestaurantsRouter from "./routes/adminRestaurants.js";
 import adminRestaurantOwnersRouter from "./routes/adminRestaurantOwners.js";
 import adminRestaurantOnboardingsRouter from "./routes/adminRestaurantOnboardings.js";
+import adminRestaurantOwnerPasswordResetRouter from "./routes/adminRestaurantOwnerPasswordReset.js";
 import restaurantMenuRouter from "./routes/restaurantMenu.js";
 import cartRouter from "./routes/cart.js";
 import addressesRouter from "./routes/addresses.js";
@@ -87,6 +88,12 @@ app.use(
 app.use(
   "/api/v1/admin/restaurant-onboardings",
   adminRestaurantOnboardingsRouter
+);
+
+// Admin-only Restaurant Owner password recovery
+app.use(
+  "/api/v1/admin/restaurant-owners",
+  adminRestaurantOwnerPasswordResetRouter
 );
 
 // ======================================
