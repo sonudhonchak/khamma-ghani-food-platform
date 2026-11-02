@@ -1,4 +1,3 @@
-
 import {
   useCallback,
   useEffect,
@@ -64,7 +63,7 @@ type RiderForm = OwnerForm & {
   vehicleNumber: string;
 };
 
-const API = "https://khamma-ghani-api.vercel.app";
+const API = (import.meta.env.VITE_API_BASE_URL?.trim() || "https://khamma-ghani-api.vercel.app").replace(/\/+$/, "");
 
 const inputClass =
   "mt-1 block w-full rounded-xl border border-orange-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-100";
