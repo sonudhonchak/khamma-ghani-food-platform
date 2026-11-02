@@ -26,7 +26,7 @@ import {
   Utensils,
 } from "lucide-react";
 
-const API_BASE = "https://khamma-ghani-api.vercel.app";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL?.trim() || "https://khamma-ghani-api.vercel.app").replace(/\/+$/, "");
 const TOKEN_KEY = "khamma_customer_token";
 const USER_KEY = "khamma_customer_user";
 
